@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from mokioclaw.evals.batch import plan_execution_order
+from mokioclaw.evals.batch import BatchSpec, plan_execution_order
 from mokioclaw.evals.models import LimitsOverride
 
 
@@ -158,9 +158,7 @@ class _FakeImage:
         return "sha256:fake-digest"
 
 
-def _identity_spec(tmp_path: Path, case_dir: Path) -> "BatchSpec":
-    from mokioclaw.evals.batch import BatchSpec
-
+def _identity_spec(tmp_path: Path, case_dir: Path) -> BatchSpec:
     return BatchSpec(
         project_root=tmp_path, architectures=["react"], case_paths=[case_dir / "cases" / "demo-case.yaml"],
         repeat=1, output_dir=tmp_path / "batch",
@@ -169,7 +167,7 @@ def _identity_spec(tmp_path: Path, case_dir: Path) -> "BatchSpec":
 
 def _seed_case_tree(tmp_path: Path) -> Path:
     (tmp_path / "evals" / "cases").mkdir(parents=True)
-    case_path = _write_case_with_limits(tmp_path / "evals" / "cases", 40)
+    _write_case_with_limits(tmp_path / "evals" / "cases", 40)
     (tmp_path / "evals" / "graders" / "cases" / "h").mkdir(parents=True)
     (tmp_path / "evals" / "graders" / "cases" / "h" / "test_h.py").write_text("def test_h(): pass\n", encoding="utf-8")
     (tmp_path / "evals" / "repos" / "templates" / "t").mkdir(parents=True)
