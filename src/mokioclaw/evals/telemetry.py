@@ -17,8 +17,8 @@ def write_checkpoint(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_name(path.name + ".tmp")
     with temporary.open("w", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        # flush + os.replace is atomic for the process-kill recovery path; fsync durability is unnecessary for telemetry (spec 6.5).
         handle.flush()
-        os.fsync(handle.fileno())
     os.replace(temporary, path)
 
 

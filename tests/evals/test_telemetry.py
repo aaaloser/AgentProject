@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from mokioclaw.evals.adapters import RunArtifacts, consume_adapter_events
@@ -183,3 +184,30 @@ def test_apply_worker_metrics_records_checkpoint_metadata() -> None:
     assert result.attempts == 2
     assert result.metadata["verification_command_runs"] == 3
     assert result.metadata["checkpoint"]["last_stage"] == "verify"
+
+
+def test_checkpoint_overhead_is_recorded_and_bounded(tmp_path: Path) -> None:
+    events = [
+        {"type": "custom_event", "event": {"type": "tool_call", "name": f"tool-{index}", "args": {"command": "pytest"}}}
+        for index in range(200)
+    ]
+
+    def timed(checkpoint_path: Path | None) -> tuple[float, int]:
+        config = AgentRunConfig(
+            run_id="r", case_id="c", task="t", workspace=tmp_path / "agent", architecture="react", retrieval="grep",
+            model="", base_url_host="", temperature=0.0, sandbox_image="img",
+            max_attempts=3, max_tool_calls=10**6, timeout_seconds=600,
+        )
+        artifacts = RunArtifacts()
+        started = time.perf_counter()
+        consume_adapter_events(iter(events), config, artifacts, checkpoint_path=checkpoint_path)
+        return time.perf_counter() - started, artifacts.tool_calls
+
+    without_seconds, without_calls = timed(None)
+    with_seconds, with_calls = timed(tmp_path / CHECKPOINT_NAME)
+    assert with_calls == without_calls == 200
+    per_event_ms = (with_seconds - without_seconds) / len(events) * 1000
+    assert per_event_ms < 5, (
+        f"checkpoint overhead too high: {per_event_ms:.3f} ms/event "
+        f"(without={without_seconds:.3f}s, with={with_seconds:.3f}s)"
+    )
