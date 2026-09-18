@@ -145,6 +145,33 @@ def test_run_worker_timeout_corrupt_checkpoint_falls_back(tmp_path: Path, monkey
     assert "telemetry recovery warning" in capsys.readouterr().err
 
 
+def test_run_worker_setup_failed_recovers_tool_calls_from_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals.models import RunStatus
+    from mokioclaw.evals.runner import EvalRunner
+
+    workspace = tmp_path / "run" / "agent"
+    workspace.mkdir(parents=True)
+    write_checkpoint(tmp_path / "run" / CHECKPOINT_NAME, {"attempt": 1, "tool_calls": 12, "tool_errors": 2, "verification_command_runs": 1})
+    config = AgentRunConfig(
+        run_id="r", case_id="c", task="t", workspace=workspace, architecture="react", retrieval="grep",
+        model="", base_url_host="", temperature=0.0, sandbox_image="img",
+        max_attempts=3, max_tool_calls=40, timeout_seconds=600,
+    )
+
+    class Crashed:
+        returncode = 3
+        stdout = ""
+        stderr = "boom"
+
+    monkeypatch.setattr("mokioclaw.evals.runner.subprocess.run", lambda *a, **k: Crashed())
+    worker_result = EvalRunner(project_root=tmp_path)._run_worker(config, tmp_path / "wc.json", "react", 600)
+    assert worker_result["status"] is RunStatus.SETUP_FAILED
+    assert worker_result["tool_calls"] == 12
+    assert worker_result["artifacts"]["tool_errors"] == 2
+    assert worker_result["artifacts"]["attempts"] == 1
+    assert worker_result["checkpoint"]["tool_calls"] == 12
+
+
 def test_run_worker_budget_merges_checkpoint_into_artifacts(tmp_path: Path, monkeypatch) -> None:
     from mokioclaw.evals.models import RunStatus
     from mokioclaw.evals.runner import EvalRunner
@@ -152,6 +179,7 @@ def test_run_worker_budget_merges_checkpoint_into_artifacts(tmp_path: Path, monk
     workspace = tmp_path / "run" / "agent"
     workspace.mkdir(parents=True)
     write_checkpoint(tmp_path / "run" / CHECKPOINT_NAME, {"attempt": 2, "tool_calls": 40, "verification_command_runs": 5, "last_stage": "verify"})
+    (tmp_path / "run" / "run-artifacts.json").write_text('{"status": "budget_exhausted", "tool_calls": 41}', encoding="utf-8")
     config = AgentRunConfig(
         run_id="r", case_id="c", task="t", workspace=workspace, architecture="react", retrieval="grep",
         model="", base_url_host="", temperature=0.0, sandbox_image="img",
@@ -166,9 +194,27 @@ def test_run_worker_budget_merges_checkpoint_into_artifacts(tmp_path: Path, monk
     monkeypatch.setattr("mokioclaw.evals.runner.subprocess.run", lambda *a, **k: Completed())
     worker_result = EvalRunner(project_root=tmp_path)._run_worker(config, tmp_path / "wc.json", "react", 600)
     assert worker_result["status"] is RunStatus.BUDGET_EXHAUSTED
+    assert worker_result["tool_calls"] == 41
     assert worker_result["artifacts"]["attempt"] == 2
+    assert worker_result["artifacts"]["attempts"] == 2
     assert worker_result["artifacts"]["verification_command_runs"] == 5
     assert worker_result["checkpoint"]["last_stage"] == "verify"
+
+
+def test_apply_worker_metrics_on_interrupted_result_uses_attempts_alias() -> None:
+    from mokioclaw.evals.models import CaseResult, RunStatus
+    from mokioclaw.evals.runner import _apply_worker_metrics
+
+    result = CaseResult(run_id="r", case_id="c", status=RunStatus.SETUP_FAILED, success=False)
+    _apply_worker_metrics(result, {
+        "status": RunStatus.SETUP_FAILED, "tool_calls": 12,
+        "artifacts": {"attempt": 1, "attempts": 1, "tool_errors": 2, "verification_command_runs": 1},
+        "checkpoint": {"attempt": 1, "tool_calls": 12, "tool_errors": 2, "verification_command_runs": 1},
+    })
+    assert result.attempts == 1
+    assert result.tool_calls == 12
+    assert result.tool_errors == 2
+    assert result.metadata["checkpoint"]["tool_calls"] == 12
 
 
 def test_apply_worker_metrics_records_checkpoint_metadata() -> None:

@@ -168,7 +168,10 @@ class EvalRunner:
         for key in ("attempt", "tool_errors", "verification_command_runs"):
             if key in checkpoint and key not in merged:
                 merged[key] = checkpoint[key]
-        result: dict[str, Any] = {"status": status, "tool_calls": tool_calls, "reason": reason}
+                if key == "attempt":
+                    merged.setdefault("attempts", checkpoint[key])
+        resolved_tool_calls = tool_calls if tool_calls else int(checkpoint.get("tool_calls", 0) or 0)
+        result: dict[str, Any] = {"status": status, "tool_calls": resolved_tool_calls, "reason": reason}
         if merged:
             result["artifacts"] = merged
         result["checkpoint"] = checkpoint
