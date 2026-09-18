@@ -85,3 +85,33 @@ def test_null_grader_checks_is_attributed_without_crash(tmp_path: Path) -> None:
 
     assert len(summary["failures"]) == 1
     assert summary["failures"][0]["detail_stage"] in ("", "unattributed")
+
+
+def _seed_batch_with_experiment(batch_dir: Path, limits: dict | None) -> None:
+    # exist_ok: callers pass pytest's already-created tmp_path directly.
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    if limits is not None:
+        (batch_dir / "experiment.json").write_text(
+            json.dumps({"schema_version": 2, "identity": {"effective_limits": limits}, "identity_fingerprint": "x", "provenance": {}}),
+            encoding="utf-8",
+        )
+
+
+def test_report_header_contains_limits_line(tmp_path: Path) -> None:
+    from mokioclaw.evals.aggregation import write_batch_report
+
+    _seed_batch_with_experiment(
+        tmp_path,
+        {"max_attempts": 3, "max_tool_calls": 80, "agent_timeout_seconds": 900, "command_timeout_seconds": 120},
+    )
+    paths = write_batch_report(tmp_path)
+    text = paths["report"].read_text(encoding="utf-8")
+    assert "max_tool_calls=80" in text and "agent_timeout_seconds=900" in text
+
+
+def test_report_header_without_experiment_has_no_limits_line(tmp_path: Path) -> None:
+    from mokioclaw.evals.aggregation import write_batch_report
+
+    _seed_batch_with_experiment(tmp_path, None)
+    paths = write_batch_report(tmp_path)
+    assert "max_tool_calls=" not in paths["report"].read_text(encoding="utf-8")

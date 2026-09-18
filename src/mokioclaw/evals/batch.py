@@ -125,6 +125,9 @@ def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
     manifest_path = output / "manifest.jsonl"
     completed = _load_completed(manifest_path)
     case_ids = [path.stem for path in spec.case_paths]
+    limits_by_case = {
+        path.stem: asdict(effective_limits(load_case(path).limits, spec.limits_override)) for path in spec.case_paths
+    }
     executed: list[dict[str, Any]] = []
     total = len(plan_execution_order(spec.architectures, case_ids, repeat or spec.repeat))
     for index, (architecture, case_id, current_repeat) in enumerate(
@@ -154,6 +157,7 @@ def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
             "run_id": result.run_id,
             "status": result.status.value,
             "success": result.success,
+            "limits": limits_by_case[case_id],
             "report_dir": report_dir.relative_to(output).as_posix(),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }

@@ -274,3 +274,28 @@ def test_resume_allowed_when_identity_matches_but_commit_changed(tmp_path: Path,
         encoding="utf-8",
     )
     assert run_batch(spec)["executed"] == []  # identity 一致 → 不拒绝续跑
+
+
+def test_manifest_row_records_limits(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+
+    case_path = _write_case_with_limits(tmp_path / "a", 40)
+    spec = BatchSpec(
+        project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1,
+        output_dir=tmp_path / "batch", limits_override=LimitsOverride(max_tool_calls=80),
+    )
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
+
+    class FakeRunner:
+        def __init__(self, *, project_root) -> None:
+            pass
+
+        def run_case(self, case_path, architecture="multi-agent", limits_override=None):
+            from mokioclaw.evals.models import CaseResult, RunStatus
+            return CaseResult(run_id="r1", case_id="demo-case", status=RunStatus.PASSED, success=True)
+
+    monkeypatch.setattr(batch_module, "EvalRunner", FakeRunner)
+    run_batch(spec)
+    row = json.loads((spec.output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["limits"] == {"max_attempts": 3, "max_tool_calls": 80, "agent_timeout_seconds": 600, "command_timeout_seconds": 120}

@@ -15,6 +15,11 @@ def _rows(batch_dir: Path) -> list[dict[str, Any]]:
 
 
 def aggregate_batch(batch_dir: Path) -> dict[str, Any]:
+    limits = None
+    experiment_path = batch_dir / "experiment.json"
+    if experiment_path.exists():
+        experiment = json.loads(experiment_path.read_text(encoding="utf-8"))
+        limits = (experiment.get("identity") or {}).get("effective_limits")
     matrix: dict[str, dict[str, list[dict[str, Any]]]] = {}
     by_architecture: dict[str, dict[str, Any]] = {}
     failures: list[dict[str, Any]] = []
@@ -58,7 +63,7 @@ def aggregate_batch(batch_dir: Path) -> dict[str, Any]:
                     "trace": (result.get("artifacts") or {}).get("trace", ""),
                 }
             )
-    return {"matrix": matrix, "by_architecture": by_architecture, "failures": failures}
+    return {"matrix": matrix, "by_architecture": by_architecture, "failures": failures, "limits": limits}
 
 
 def write_batch_report(batch_dir: Path) -> dict[str, Path]:
@@ -77,6 +82,14 @@ def _markdown(summary: dict[str, Any]) -> str:
         "> The following are **Agent run results**, distinct from fixture/tri-state verification. n=3: all repeats shown as-is; no confidence intervals; no statistical significance claims.",
         "",
     ]
+    if summary.get("limits"):
+        limits = summary["limits"]
+        lines.append(
+            "> Limits: "
+            f"max_attempts={limits['max_attempts']}, max_tool_calls={limits['max_tool_calls']}, "
+            f"agent_timeout_seconds={limits['agent_timeout_seconds']}, command_timeout_seconds={limits['command_timeout_seconds']}"
+        )
+        lines.append("")
     for architecture, cases in summary["matrix"].items():
         lines.append(f"## {architecture}")
         lines.append("")
