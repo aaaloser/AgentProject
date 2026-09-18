@@ -1,0 +1,20 @@
+id: config-cli-precedence-order-01
+category: bugfix
+task: 修复配置优先级，使 CLI 参数优先于环境变量，环境变量优先于配置文件，配置文件优先于默认值。空值不得覆盖更低层的有效值，现有 CLI 参数和默认文本输出必须保持兼容。
+repository:
+  template: config_cli
+  mutation: config-cli-precedence-order.patch
+public_verification:
+  commands: [python -m pytest -q]
+grader:
+  id: config_cli.precedence_order
+  hidden_tests: evals/graders/cases/config_cli/precedence_order
+  protected_paths: [tests/test_config_cli.py]
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths: [.]

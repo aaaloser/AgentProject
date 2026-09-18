@@ -1,0 +1,20 @@
+id: mini-api-pagination-boundary-01
+category: bugfix
+task: 修复分页函数在最后一页仍返回 next_page 的问题，保持现有返回结构和参数校验行为不变。
+repository:
+  template: mini_api
+  mutation: mini-api-pagination-boundary.patch
+public_verification:
+  commands: [python -m pytest -q]
+grader:
+  id: mini_api.pagination_boundary
+  hidden_tests: evals/graders/cases/mini_api/pagination_boundary
+  protected_paths: [tests/test_pagination.py]
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths: [.]

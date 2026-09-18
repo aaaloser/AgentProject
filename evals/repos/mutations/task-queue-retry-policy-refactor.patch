@@ -1,0 +1,29 @@
+diff --git a/src/task_queue/worker.py b/src/task_queue/worker.py
+index db6dda9..fd368ed 100644
+--- a/src/task_queue/worker.py
++++ b/src/task_queue/worker.py
+@@ -3,7 +3,6 @@ from __future__ import annotations
+ from collections.abc import Callable
+ 
+ from task_queue.models import Task, TaskResult
+-from task_queue.retry_policy import RetryPolicy
+ 
+ 
+ Runner = Callable[[Task], bool]
+@@ -17,8 +16,7 @@ class Worker:
+     failing runner call returns ``ok=False`` with ``retry_count == 3``.
+     """
+ 
+-    def __init__(self, retry_policy: RetryPolicy | None = None) -> None:
+-        self.retry_policy = retry_policy or RetryPolicy()
++    max_attempts = 3
+ 
+     def run(self, task: Task, runner: Runner) -> TaskResult:
+         attempts = 0
+@@ -27,5 +25,5 @@ class Worker:
+             if runner(task):
+                 return TaskResult(task=task, ok=True, attempts=attempts)
+             task.retry_count += 1
+-            if not self.retry_policy.should_retry(task.retry_count):
++            if task.retry_count >= self.max_attempts:
+                 return TaskResult(task=task, ok=False, attempts=attempts)

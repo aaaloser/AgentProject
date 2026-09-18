@@ -1,0 +1,14 @@
+diff --git a/src/config_cli/cli.py b/src/config_cli/cli.py
+index 463b848..30a5f5a 100644
+--- a/src/config_cli/cli.py
++++ b/src/config_cli/cli.py
+@@ -37,8 +37,7 @@ def main(argv: list[str] | None = None) -> int:
+         file=_read_config(args.config) if args.config else {},
+     )
+     if args.format == "json":
+-        print(f"host={settings['host']}")
+-        print(f"retries={settings['retries']}")
++        print(json.dumps({"host": settings["host"], "retries": settings["retries"]}, sort_keys=True))
+         return 0
+     print(f"host={settings['host']}")
+     print(f"retries={settings['retries']}")

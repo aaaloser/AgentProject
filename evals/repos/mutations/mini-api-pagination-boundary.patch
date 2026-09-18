@@ -1,0 +1,10 @@
+diff --git a/src/mini_api/pagination.py b/src/mini_api/pagination.py
+--- a/src/mini_api/pagination.py
++++ b/src/mini_api/pagination.py
+@@ -12,5 +12,5 @@ def paginate(items: list[Any], *, page: int, page_size: int) -> dict[str, Any]:
+         "items": items[start:end],
+         "page": page,
+         "page_size": page_size,
+-        "next_page": page + 1 if end < len(items) else None,
++        "next_page": page + 1 if start < len(items) else None,
+     }

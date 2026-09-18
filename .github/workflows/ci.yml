@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Reject tracked secret-shaped values
+        shell: bash
+        run: |
+          matches="$(git grep -lE '(sk-[A-Za-z0-9_-]{16,}|tvly-[A-Za-z0-9_-]{16,}|API_KEY=[A-Za-z0-9_-]{12,})' -- ':!*.example' || true)"
+          test -z "$matches" || { printf '%s\n' "$matches"; exit 1; }
+      - run: uv run ruff check .
+      - run: docker build -t mokioclaw-eval-python:3.13 evals/images/python
+      - run: timeout 300 uv run pytest -q

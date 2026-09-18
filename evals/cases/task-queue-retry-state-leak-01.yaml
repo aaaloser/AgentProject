@@ -1,0 +1,20 @@
+id: task-queue-retry-state-leak-01
+category: bugfix
+task: 修复同一个 Worker 连续处理任务时 retry_count 泄漏的问题。每个 Task 的重试计数必须独立，Worker 实例之间也不能共享状态。默认重试行为和公共接口保持不变。
+repository:
+  template: task_queue
+  mutation: task-queue-retry-state-leak.patch
+public_verification:
+  commands: [python -m pytest -q]
+grader:
+  id: task_queue.retry_state_leak
+  hidden_tests: evals/graders/cases/task_queue/retry_state_leak
+  protected_paths: [tests/test_task_queue.py]
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths: [.]

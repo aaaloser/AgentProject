@@ -1,0 +1,18 @@
+.env
+.mokioclaw/
+.mokioclaw/eval-runs/
+.pytest_cache/
+__pycache__/
+*.pyc
+.agent-sync/
+.agent-sync-store/
+.codegraph/
+.superpowers/
+evals/reports/
+.worktrees/
+
+
+# docs
+docs/
+
+# *.md

@@ -1,0 +1,20 @@
+id: config-cli-json-output-02
+category: feature
+task: 使 show 命令在 --format json 时输出包含 host 和 retries 的稳定 JSON。默认 --format text 的行为、退出码和现有 CLI 参数必须保持兼容。
+repository:
+  template: config_cli
+  mutation: config-cli-json-output.patch
+public_verification:
+  commands: [python -m pytest -q]
+grader:
+  id: config_cli.json_output
+  hidden_tests: evals/graders/cases/config_cli/json_output
+  protected_paths: [tests/test_config_cli.py]
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths: [.]

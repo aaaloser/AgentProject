@@ -1,0 +1,26 @@
+diff --git a/src/mini_api/client.py b/src/mini_api/client.py
+index 7297770..df8b85e 100644
+--- a/src/mini_api/client.py
++++ b/src/mini_api/client.py
+@@ -28,9 +28,15 @@ class MiniClient:
+     def __init__(self, transport: Transport | None = None) -> None:
+         self._transport = transport or _default_transport
+ 
+-    def request_json(self, path: str) -> Any:
+-        return self._transport(
+-            path,
+-            DEFAULT_TIMEOUT_SECONDS,
+-            DEFAULT_RETRIES,
+-        )
++    def request_json(
++        self,
++        path: str,
++        *,
++        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
++        retries: int = DEFAULT_RETRIES,
++    ) -> Any:
++        if timeout_seconds <= 0:
++            raise ValueError("timeout_seconds must be positive")
++        if retries < 0:
++            raise ValueError("retries cannot be negative")
++        return self._transport(path, timeout_seconds, retries)

@@ -1,0 +1,13 @@
+diff --git a/src/config_cli/settings.py b/src/config_cli/settings.py
+index 5f6da44..1b3734d 100644
+--- a/src/config_cli/settings.py
++++ b/src/config_cli/settings.py
+@@ -22,7 +22,7 @@ def resolve_settings(
+     file: Mapping[str, object] | None = None,
+ ) -> dict[str, object]:
+     resolved = dict(DEFAULT_SETTINGS)
+-    for layer in (cli or {}, env or {}, file or {}):
++    for layer in (file or {}, env or {}, cli or {}):
+         for key in resolved:
+             if key in layer and not _is_blank(layer[key]):
+                 resolved[key] = _coerce(key, layer[key])

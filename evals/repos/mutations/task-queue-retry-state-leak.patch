@@ -1,0 +1,21 @@
+diff --git a/src/task_queue/worker.py b/src/task_queue/worker.py
+index db6dda9..137ef3d 100644
+--- a/src/task_queue/worker.py
++++ b/src/task_queue/worker.py
+@@ -19,6 +19,7 @@ class Worker:
+ 
+     def __init__(self, retry_policy: RetryPolicy | None = None) -> None:
+         self.retry_policy = retry_policy or RetryPolicy()
++        self.last_retry_count = 0
+ 
+     def run(self, task: Task, runner: Runner) -> TaskResult:
+         attempts = 0
+@@ -26,6 +27,7 @@ class Worker:
+             attempts += 1
+             if runner(task):
+                 return TaskResult(task=task, ok=True, attempts=attempts)
+-            task.retry_count += 1
++            self.last_retry_count += 1
++            task.retry_count = self.last_retry_count
+             if not self.retry_policy.should_retry(task.retry_count):
+                 return TaskResult(task=task, ok=False, attempts=attempts)

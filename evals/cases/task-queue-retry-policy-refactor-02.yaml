@@ -1,0 +1,20 @@
+id: task-queue-retry-policy-refactor-02
+category: refactor
+task: 修复 Worker 与 RetryPolicy 的集成，使 Worker 支持注入自定义 max_attempts 的 RetryPolicy，并保持默认重试行为、Task/TaskResult 公共接口和重试边界（retry_count 计失败次数，max_attempts 计总调用次数）不变。
+repository:
+  template: task_queue
+  mutation: task-queue-retry-policy-refactor.patch
+public_verification:
+  commands: [python -m pytest -q]
+grader:
+  id: task_queue.retry_policy_refactor
+  hidden_tests: evals/graders/cases/task_queue/retry_policy_refactor
+  protected_paths: [tests/test_task_queue.py]
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths: [.]
