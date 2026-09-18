@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol, Sequence
 
 from mokioclaw.core.agent import stream_agent_events
 from mokioclaw.evals.models import AgentRunConfig
+from mokioclaw.evals.telemetry import checkpoint_path_for, write_checkpoint
 from mokioclaw.providers.usage import start_usage_collection, sum_usage
 
 
@@ -53,7 +56,13 @@ class MokioAgentAdapter:
             allow_web_search=False,
         )
         try:
-            consume_adapter_events(events, config, artifacts, verification_commands=config.verification_commands)
+            consume_adapter_events(
+                events,
+                config,
+                artifacts,
+                verification_commands=config.verification_commands,
+                checkpoint_path=checkpoint_path_for(config.workspace),
+            )
         finally:
             usage = sum_usage(records)
             if artifacts.input_tokens is None:
@@ -106,11 +115,38 @@ def consume_adapter_events(
     artifacts: RunArtifacts,
     *,
     verification_commands: Sequence[str] = (),
+    checkpoint_path: Path | None = None,
 ) -> None:
+    started = time.perf_counter()
+    last_stage = ""
+    last_tool = ""
     try:
         for event in events:
             artifacts.events.append(event)
             _record_event(artifacts, event, verification_commands)
+            event_type = event.get("type")
+            payload = event.get("event")
+            if event_type == "graph_event" and isinstance(payload, dict):
+                stage_keys = [key for key, value in payload.items() if isinstance(value, dict)]
+                if stage_keys:
+                    last_stage = stage_keys[-1]
+            elif event_type == "custom_event" and isinstance(payload, dict):
+                if payload.get("type") in ("tool_call", "tool_result"):
+                    last_tool = str(payload.get("name") or "")
+            if checkpoint_path is not None:
+                write_checkpoint(
+                    checkpoint_path,
+                    {
+                        "attempt": artifacts.attempts,
+                        "tool_calls": artifacts.tool_calls,
+                        "tool_errors": artifacts.tool_errors,
+                        "elapsed_seconds": round(time.perf_counter() - started, 3),
+                        "last_stage": last_stage,
+                        "last_tool": last_tool,
+                        "last_event_timestamp": datetime.now(timezone.utc).isoformat(),
+                        "verification_command_runs": artifacts.verification_command_runs,
+                    },
+                )
             if artifacts.tool_calls > config.max_tool_calls:
                 raise ToolBudgetExceeded(artifacts.tool_calls)
     finally:
