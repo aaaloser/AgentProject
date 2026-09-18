@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-from mokioclaw.evals.models import CaseResult, RunStatus
+from mokioclaw.evals.cases import load_case
+from mokioclaw.evals.models import CaseResult, LimitsOverride, RunStatus, effective_limits
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
 from mokioclaw.evals.sandbox import DockerCommandExecutor
@@ -27,6 +28,7 @@ class BatchSpec:
     case_paths: list[Path]
     repeat: int
     output_dir: Path
+    limits_override: LimitsOverride | None = None
 
 
 def plan_execution_order(architectures: list[str], case_ids: list[str], repeat: int) -> list[tuple[str, str, int]]:
@@ -84,6 +86,10 @@ def _load_completed(manifest_path: Path) -> set[tuple[str, str, int]]:
 
 
 def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
+    if spec.case_paths:
+        effective = [effective_limits(load_case(path).limits, spec.limits_override) for path in spec.case_paths]
+        if len(set(effective)) != 1:
+            raise RuntimeError("selected cases have mixed effective limits: run a batch whose cases share one limits profile")
     output = spec.output_dir
     output.mkdir(parents=True, exist_ok=True)
     experiment_path = output / "experiment.json"
@@ -108,7 +114,7 @@ def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
         case_path = next(path for path in spec.case_paths if path.stem == case_id)
         print(f"[{index}/{total}] {architecture}/{case_id}/r{current_repeat} ...", flush=True)
         try:
-            result = EvalRunner(project_root=spec.project_root).run_case(case_path, architecture=architecture)
+            result = EvalRunner(project_root=spec.project_root).run_case(case_path, architecture=architecture, limits_override=spec.limits_override)
         except Exception as exc:  # failure isolation: record and continue
             result = CaseResult(
                 run_id=f"{case_id}-batch-error-{index}",

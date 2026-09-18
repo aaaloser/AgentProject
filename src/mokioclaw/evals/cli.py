@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from mokioclaw.evals.batch import BatchSpec, run_batch
+from mokioclaw.evals.models import LimitsOverride
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
 
@@ -37,6 +38,8 @@ def batch_command(
     repeat: Annotated[int, typer.Option("--repeat")] = 1,
     cases: Annotated[str, typer.Option("--cases")] = "",
     output: Annotated[Path, typer.Option("--output")] = Path("evals/reports/ablation"),
+    max_tool_calls: Annotated[int | None, typer.Option("--max-tool-calls")] = None,
+    agent_timeout_seconds: Annotated[int | None, typer.Option("--agent-timeout-seconds")] = None,
 ) -> None:
     project_root = Path.cwd()
     case_paths = (
@@ -51,6 +54,7 @@ def batch_command(
         case_paths=case_paths,
         repeat=repeat,
         output_dir=batch_dir,
+        limits_override=LimitsOverride(max_tool_calls=max_tool_calls, agent_timeout_seconds=agent_timeout_seconds),
     )
     try:
         run_batch(spec)
