@@ -35,9 +35,11 @@ def test_run_batch_refuses_fingerprint_mismatch(tmp_path: Path, monkeypatch) -> 
 
     case_path = _write_case(tmp_path)
     spec = BatchSpec(project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1, output_dir=tmp_path / "batch")
-    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"fields": {}, "fingerprint": "aaa"})
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
     (spec.output_dir).mkdir(parents=True)
-    (spec.output_dir / "experiment.json").write_text(json.dumps({"fields": {}, "fingerprint": "bbb"}), encoding="utf-8")
+    (spec.output_dir / "experiment.json").write_text(
+        json.dumps({"schema_version": 2, "identity": {}, "identity_fingerprint": "bbb", "provenance": {}}), encoding="utf-8"
+    )
 
     try:
         run_batch(spec)
@@ -78,7 +80,8 @@ def test_run_batch_skips_completed_and_appends_manifest(tmp_path: Path, monkeypa
 
 
 def _write_case_with_limits(case_dir: Path, max_tool_calls: int) -> Path:
-    case_dir.mkdir(parents=True)
+    # exist_ok: callers such as _seed_case_tree pre-create the directory.
+    case_dir.mkdir(parents=True, exist_ok=True)
     path = case_dir / "demo-case.yaml"
     path.write_text(
         "id: demo-case\ncategory: feature\ntask: t\n"
@@ -145,3 +148,129 @@ def test_batch_cli_parses_limits_flags(tmp_path: Path, monkeypatch) -> None:
     )
     assert result.exit_code == 0
     assert captured["spec"].limits_override == LimitsOverride(max_tool_calls=80, agent_timeout_seconds=900)
+
+
+class _FakeImage:
+    def __init__(self, image: str) -> None:
+        pass
+
+    def image_id(self) -> str:
+        return "sha256:fake-digest"
+
+
+def _identity_spec(tmp_path: Path, case_dir: Path) -> "BatchSpec":
+    from mokioclaw.evals.batch import BatchSpec
+
+    return BatchSpec(
+        project_root=tmp_path, architectures=["react"], case_paths=[case_dir / "cases" / "demo-case.yaml"],
+        repeat=1, output_dir=tmp_path / "batch",
+    )
+
+
+def _seed_case_tree(tmp_path: Path) -> Path:
+    (tmp_path / "evals" / "cases").mkdir(parents=True)
+    case_path = _write_case_with_limits(tmp_path / "evals" / "cases", 40)
+    (tmp_path / "evals" / "graders" / "cases" / "h").mkdir(parents=True)
+    (tmp_path / "evals" / "graders" / "cases" / "h" / "test_h.py").write_text("def test_h(): pass\n", encoding="utf-8")
+    (tmp_path / "evals" / "repos" / "templates" / "t").mkdir(parents=True)
+    (tmp_path / "evals" / "repos" / "templates" / "t" / "f.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "evals" / "repos" / "mutations").mkdir(parents=True)
+    (tmp_path / "evals" / "repos" / "mutations" / "m").write_text("diff\n", encoding="utf-8")
+    (tmp_path / "src" / "mokioclaw").mkdir(parents=True)
+    (tmp_path / "src" / "mokioclaw" / "a.py").write_text("y = 2\n", encoding="utf-8")
+    return tmp_path
+
+
+def _patch_external(monkeypatch, commit: str) -> None:
+    from mokioclaw.evals import batch as batch_module
+
+    monkeypatch.setattr(batch_module, "DockerCommandExecutor", _FakeImage)
+
+    def fake_check(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = commit
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr(batch_module.subprocess, "run", fake_check)
+
+
+def test_fingerprint_ignores_unselected_files_and_commit(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals.batch import build_experiment_fingerprint
+
+    _seed_case_tree(tmp_path)
+    _patch_external(monkeypatch, "commit-1")
+    spec = _identity_spec(tmp_path, tmp_path / "evals")
+    first = build_experiment_fingerprint(spec)
+
+    # 无关文件：未选中的 case YAML + 其他 grader/template 变化
+    (tmp_path / "evals" / "cases" / "other-case.yaml").write_text("id: other-case\n", encoding="utf-8")
+    (tmp_path / "evals" / "repos" / "templates" / "other").mkdir()
+    (tmp_path / "evals" / "repos" / "templates" / "other" / "g.py").write_text("z = 3\n", encoding="utf-8")
+    # 无关 commit（provenance 采集变化，材料未变）
+    _patch_external(monkeypatch, "commit-2")
+    second = build_experiment_fingerprint(spec)
+
+    assert first["identity_fingerprint"] == second["identity_fingerprint"]
+    assert second["provenance"]["git_commit"] == "commit-2"
+    assert first["provenance"]["git_commit"] == "commit-1"
+
+
+def test_fingerprint_changes_with_selected_material_or_limits(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals.batch import BatchSpec, build_experiment_fingerprint
+
+    _seed_case_tree(tmp_path)
+    _patch_external(monkeypatch, "commit-1")
+    spec = _identity_spec(tmp_path, tmp_path / "evals")
+    base = build_experiment_fingerprint(spec)
+
+    _patch_external(monkeypatch, "commit-1")
+    override_spec = BatchSpec(
+        project_root=tmp_path, architectures=["react"], case_paths=[spec.case_paths[0]],
+        repeat=1, output_dir=tmp_path / "batch", limits_override=LimitsOverride(max_tool_calls=80),
+    )
+    assert build_experiment_fingerprint(override_spec)["identity_fingerprint"] != base["identity_fingerprint"]
+
+    _patch_external(monkeypatch, "commit-1")
+    (tmp_path / "evals" / "cases" / "demo-case.yaml").write_text(
+        (tmp_path / "evals" / "cases" / "demo-case.yaml").read_text(encoding="utf-8") + "policy:\n  network: provider_only\n",
+        encoding="utf-8",
+    )
+    assert build_experiment_fingerprint(spec)["identity_fingerprint"] != base["identity_fingerprint"]
+
+
+def test_fingerprint_identity_fields(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals.batch import build_experiment_fingerprint
+
+    _seed_case_tree(tmp_path)
+    _patch_external(monkeypatch, "abc123")
+    payload = build_experiment_fingerprint(_identity_spec(tmp_path, tmp_path / "evals"))
+
+    assert payload["schema_version"] == 2
+    identity = payload["identity"]
+    assert identity["effective_limits"] == {"max_attempts": 3, "max_tool_calls": 40, "agent_timeout_seconds": 600, "command_timeout_seconds": 120}
+    assert identity["architectures"] == ["react"]
+    assert payload["provenance"]["git_commit"] == "abc123"
+    demo = identity["cases"]["demo-case"]
+    assert set(demo) == {"yaml_sha256", "grader_tree_hash", "template_tree_hash", "mutation_sha256"}
+
+
+def test_resume_allowed_when_identity_matches_but_commit_changed(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+
+    case_path = _write_case_with_limits(tmp_path / "a", 40)
+    spec = BatchSpec(project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1, output_dir=tmp_path / "batch")
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "same", "provenance": {"git_commit": "c1"}})
+    spec.output_dir.mkdir(parents=True)
+    (spec.output_dir / "experiment.json").write_text(
+        json.dumps({"schema_version": 2, "identity": {}, "identity_fingerprint": "same", "provenance": {"git_commit": "c2"}}), encoding="utf-8"
+    )
+    # completed triple already in the manifest: resume is allowed and nothing re-runs
+    (spec.output_dir / "manifest.jsonl").write_text(
+        json.dumps({"architecture": "react", "case_id": "demo-case", "repeat": 1, "run_id": "r1", "status": "failed", "success": False, "report_dir": "runs/react/demo-case-r1", "completed_at": "t"}) + "\n",
+        encoding="utf-8",
+    )
+    assert run_batch(spec)["executed"] == []  # identity 一致 → 不拒绝续跑

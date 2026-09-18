@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from mokioclaw.evals.cases import load_case
-from mokioclaw.evals.models import CaseResult, LimitsOverride, RunStatus, effective_limits
+from mokioclaw.evals.models import CaseResult, Limits, LimitsOverride, RunStatus, effective_limits
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
 from mokioclaw.evals.sandbox import DockerCommandExecutor
@@ -57,20 +57,41 @@ def build_experiment_fingerprint(spec: BatchSpec) -> dict[str, Any]:
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=spec.project_root, capture_output=True, text=True, check=True
     ).stdout.strip()
-    fields = {
-        "git_commit": commit,
+    cases: dict[str, Any] = {}
+    effective: list[Limits] = []
+    for path in spec.case_paths:
+        case = load_case(path)
+        limits = effective_limits(case.limits, spec.limits_override)
+        effective.append(limits)
+        cases[case.id] = {
+            "yaml_sha256": _sha256_bytes(path.read_bytes()),
+            "grader_tree_hash": _tree_hash(spec.project_root / case.grader.hidden_tests, "*"),
+            "template_tree_hash": _tree_hash(spec.project_root / "evals" / "repos" / "templates" / case.repository.template, "*"),
+            "mutation_sha256": _sha256_bytes((spec.project_root / "evals" / "repos" / "mutations" / case.repository.mutation).read_bytes()),
+        }
+    if effective and len(set(effective)) != 1:
+        raise RuntimeError("selected cases have mixed effective limits; refuse to start a mixed batch")
+    identity = {
         "model": os.getenv("MODEL", ""),
         "base_url_host": urlparse(os.getenv("BASE_URL", "")).hostname or "",
         "temperature": 0.0,
         "architectures": sorted(spec.architectures),
         "case_ids": [path.stem for path in spec.case_paths],
-        "cases_hash": _tree_hash(spec.project_root / "evals" / "cases", "*.yaml"),
-        "graders_hash": _tree_hash(spec.project_root / "evals" / "graders", "*.py"),
+        "effective_limits": asdict(effective[0]) if effective else asdict(Limits()),
+        "cases": cases,
         "src_hash": _tree_hash(spec.project_root / "src" / "mokioclaw", "*.py"),
         "image_digest": DockerCommandExecutor(EVAL_IMAGE).image_id(),
     }
-    fingerprint = _sha256_bytes(json.dumps(fields, sort_keys=True).encode("utf-8"))
-    return {"fields": fields, "fingerprint": fingerprint}
+    return {
+        "schema_version": 2,
+        "identity": identity,
+        "identity_fingerprint": _sha256_bytes(json.dumps(identity, sort_keys=True).encode("utf-8")),
+        "provenance": {
+            "git_commit": commit,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "batch_dir": str(spec.output_dir),
+        },
+    }
 
 
 def _load_completed(manifest_path: Path) -> set[tuple[str, str, int]]:
@@ -96,7 +117,7 @@ def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
     fingerprint = build_experiment_fingerprint(spec)
     if experiment_path.exists():
         previous = json.loads(experiment_path.read_text(encoding="utf-8"))
-        if previous.get("fingerprint") != fingerprint["fingerprint"]:
+        if previous.get("identity_fingerprint") != fingerprint["identity_fingerprint"]:
             raise RuntimeError("experiment fingerprint mismatch: start a new batch instead of resuming")
     else:
         experiment_path.write_text(json.dumps(fingerprint, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
