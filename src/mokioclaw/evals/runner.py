@@ -17,6 +17,7 @@ from mokioclaw.evals.grader import grade_case
 from mokioclaw.evals.models import AgentRunConfig, CaseResult, Limits, LimitsOverride, RunStatus, effective_limits
 from mokioclaw.evals.patches import create_patch
 from mokioclaw.evals.sandbox import DockerCommandExecutor
+from mokioclaw.evals.telemetry import CHECKPOINT_NAME, load_checkpoint
 from mokioclaw.evals.workspace import PreparedWorkspace, prepare_workspace
 
 
@@ -124,6 +125,7 @@ class EvalRunner:
 
     def _run_worker(self, config: AgentRunConfig, worker_config: Path, architecture: str, timeout: int) -> dict[str, Any]:
         command = [sys.executable, "-m", "mokioclaw.evals.worker", "--config", str(worker_config), "--adapter", architecture]
+        checkpoint_path = config.workspace.parent / CHECKPOINT_NAME
         environment = _worker_environment(self.project_root)
         for key in ("API_KEY", "MODEL", "BASE_URL"):
             if value := os.getenv(key):
@@ -131,15 +133,46 @@ class EvalRunner:
         try:
             completed = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=timeout, cwd=self.project_root)
         except subprocess.TimeoutExpired:
-            return {"status": RunStatus.TIMED_OUT, "tool_calls": 0, "reason": "worker timeout"}
+            checkpoint, warning = load_checkpoint(checkpoint_path)
+            if warning:
+                print(warning, file=sys.stderr)
+            return {
+                "status": RunStatus.TIMED_OUT,
+                "tool_calls": int(checkpoint.get("tool_calls", 0) or 0),
+                "reason": "worker timeout",
+                "checkpoint": checkpoint,
+            }
         artifacts_path = config.workspace.parent / "run-artifacts.json"
         payload = json.loads(artifacts_path.read_text(encoding="utf-8")) if artifacts_path.exists() else {}
         if payload.get("status") == "budget_exhausted" or completed.returncode == 2:
-            return {"status": RunStatus.BUDGET_EXHAUSTED, "tool_calls": int(payload.get("tool_calls", 0)), "reason": payload.get("error", "tool budget exhausted")}
+            return self._interrupted_result(
+                RunStatus.BUDGET_EXHAUSTED, int(payload.get("tool_calls", 0)),
+                payload.get("error", "tool budget exhausted"), checkpoint_path, payload,
+            )
         if completed.returncode != 0 or payload.get("status") != "completed":
-            return {"status": RunStatus.SETUP_FAILED, "tool_calls": int(payload.get("tool_calls", 0)), "reason": payload.get("error") or completed.stderr.strip()}
+            return self._interrupted_result(
+                RunStatus.SETUP_FAILED, int(payload.get("tool_calls", 0)),
+                payload.get("error") or completed.stderr.strip(), checkpoint_path, payload,
+            )
         artifacts = payload
         return {"status": RunStatus.PASSED, "tool_calls": int(artifacts.get("tool_calls", 0)), "artifacts": artifacts}
+
+    @staticmethod
+    def _interrupted_result(status: RunStatus, tool_calls: int, reason: str, checkpoint_path: Path, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        checkpoint, warning = load_checkpoint(checkpoint_path)
+        if warning:
+            print(warning, file=sys.stderr)
+        merged: dict[str, Any] = {}
+        if payload:
+            merged.update({key: value for key, value in payload.items() if key != "status"})
+        for key in ("attempt", "tool_errors", "verification_command_runs"):
+            if key in checkpoint and key not in merged:
+                merged[key] = checkpoint[key]
+        result: dict[str, Any] = {"status": status, "tool_calls": tool_calls, "reason": reason}
+        if merged:
+            result["artifacts"] = merged
+        result["checkpoint"] = checkpoint
+        return result
 
     @staticmethod
     def _metadata(config: AgentRunConfig, architecture: str) -> dict[str, Any]:
@@ -167,6 +200,8 @@ def _apply_worker_metrics(result: CaseResult, worker_result: dict[str, Any]) -> 
     result.metadata["handoff_count"] = int(artifacts.get("handoff_count", 0) or 0)
     result.metadata["verification_command_runs"] = int(artifacts.get("verification_command_runs", 0) or 0)
     result.metadata["token_coverage"] = "full" if result.input_tokens is not None else "unavailable"
+    if worker_result.get("checkpoint"):
+        result.metadata["checkpoint"] = worker_result["checkpoint"]
 
 
 def _config_payload(config: AgentRunConfig) -> dict[str, Any]:

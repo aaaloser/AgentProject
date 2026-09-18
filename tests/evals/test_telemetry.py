@@ -98,3 +98,88 @@ def test_checkpoint_write_failure_does_not_kill_run(tmp_path: Path, monkeypatch)
     assert artifacts.tool_calls == 1
     assert artifacts.tool_errors == 1
     assert artifacts.attempts == 1
+
+
+def test_run_worker_timeout_recovers_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    from mokioclaw.evals.models import RunStatus
+    from mokioclaw.evals.runner import EvalRunner
+
+    workspace = tmp_path / "run" / "agent"
+    workspace.mkdir(parents=True)
+    checkpoint_path = tmp_path / "run" / CHECKPOINT_NAME
+    write_checkpoint(checkpoint_path, {"attempt": 2, "tool_calls": 37, "last_stage": "verify", "verification_command_runs": 3})
+    config = AgentRunConfig(
+        run_id="r", case_id="c", task="t", workspace=workspace, architecture="react", retrieval="grep",
+        model="", base_url_host="", temperature=0.0, sandbox_image="img",
+        max_attempts=3, max_tool_calls=40, timeout_seconds=600,
+    )
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="worker", timeout=600)
+
+    monkeypatch.setattr("mokioclaw.evals.runner.subprocess.run", fake_run)
+    worker_result = EvalRunner(project_root=tmp_path)._run_worker(config, tmp_path / "wc.json", "react", 600)
+    assert worker_result["status"] is RunStatus.TIMED_OUT
+    assert worker_result["tool_calls"] == 37
+    assert worker_result["checkpoint"]["attempt"] == 2
+
+
+def test_run_worker_timeout_corrupt_checkpoint_falls_back(tmp_path: Path, monkeypatch, capsys) -> None:
+    import subprocess
+
+    from mokioclaw.evals.runner import EvalRunner
+
+    (tmp_path / "run" / "agent").mkdir(parents=True)
+    (tmp_path / "run" / CHECKPOINT_NAME).write_text("{broken", encoding="utf-8")
+    config = AgentRunConfig(
+        run_id="r", case_id="c", task="t", workspace=tmp_path / "run" / "agent", architecture="react",
+        retrieval="grep", model="", base_url_host="", temperature=0.0, sandbox_image="img",
+        max_attempts=3, max_tool_calls=40, timeout_seconds=600,
+    )
+    monkeypatch.setattr("mokioclaw.evals.runner.subprocess.run", lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd="w", timeout=1)))
+    worker_result = EvalRunner(project_root=tmp_path)._run_worker(config, tmp_path / "wc.json", "react", 600)
+    assert worker_result["tool_calls"] == 0
+    assert "telemetry recovery warning" in capsys.readouterr().err
+
+
+def test_run_worker_budget_merges_checkpoint_into_artifacts(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals.models import RunStatus
+    from mokioclaw.evals.runner import EvalRunner
+
+    workspace = tmp_path / "run" / "agent"
+    workspace.mkdir(parents=True)
+    write_checkpoint(tmp_path / "run" / CHECKPOINT_NAME, {"attempt": 2, "tool_calls": 40, "verification_command_runs": 5, "last_stage": "verify"})
+    config = AgentRunConfig(
+        run_id="r", case_id="c", task="t", workspace=workspace, architecture="react", retrieval="grep",
+        model="", base_url_host="", temperature=0.0, sandbox_image="img",
+        max_attempts=3, max_tool_calls=40, timeout_seconds=600,
+    )
+
+    class Completed:
+        returncode = 2
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("mokioclaw.evals.runner.subprocess.run", lambda *a, **k: Completed())
+    worker_result = EvalRunner(project_root=tmp_path)._run_worker(config, tmp_path / "wc.json", "react", 600)
+    assert worker_result["status"] is RunStatus.BUDGET_EXHAUSTED
+    assert worker_result["artifacts"]["attempt"] == 2
+    assert worker_result["artifacts"]["verification_command_runs"] == 5
+    assert worker_result["checkpoint"]["last_stage"] == "verify"
+
+
+def test_apply_worker_metrics_records_checkpoint_metadata() -> None:
+    from mokioclaw.evals.models import CaseResult, RunStatus
+    from mokioclaw.evals.runner import _apply_worker_metrics
+
+    result = CaseResult(run_id="r", case_id="c", status=RunStatus.TIMED_OUT, success=False)
+    _apply_worker_metrics(result, {
+        "status": RunStatus.TIMED_OUT, "tool_calls": 37,
+        "checkpoint": {"attempt": 2, "last_stage": "verify", "elapsed_seconds": 588.1},
+        "artifacts": {"attempts": 2, "verification_command_runs": 3},
+    })
+    assert result.attempts == 2
+    assert result.metadata["verification_command_runs"] == 3
+    assert result.metadata["checkpoint"]["last_stage"] == "verify"
