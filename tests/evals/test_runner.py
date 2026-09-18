@@ -75,7 +75,7 @@ def test_run_config_loads_provider_settings_from_project_dotenv(tmp_path: Path, 
     case = load_case(SOURCE_CASE)
     prepared = PreparedWorkspace(tmp_path / "run", tmp_path / "baseline", tmp_path / "agent")
 
-    config = runner._run_config(case, prepared, "run-id", "multi-agent")
+    config = runner._run_config(case, prepared, "run-id", "multi-agent", case.limits)
 
     assert config.model == "test-model"
     assert config.base_url_host == "provider.example"

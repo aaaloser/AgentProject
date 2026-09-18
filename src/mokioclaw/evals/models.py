@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence
@@ -39,6 +39,24 @@ class Limits:
     max_tool_calls: int = 40
     agent_timeout_seconds: int = 600
     command_timeout_seconds: int = 120
+
+
+@dataclass(frozen=True)
+class LimitsOverride:
+    max_tool_calls: int | None = None
+    agent_timeout_seconds: int | None = None
+
+
+def effective_limits(limits: Limits, override: LimitsOverride | None) -> Limits:
+    if override is None:
+        return limits
+    return replace(
+        limits,
+        max_tool_calls=override.max_tool_calls if override.max_tool_calls is not None else limits.max_tool_calls,
+        agent_timeout_seconds=(
+            override.agent_timeout_seconds if override.agent_timeout_seconds is not None else limits.agent_timeout_seconds
+        ),
+    )
 
 
 @dataclass(frozen=True)

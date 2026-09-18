@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from mokioclaw.evals.cases import load_case
 from mokioclaw.evals.grader import grade_case
-from mokioclaw.evals.models import AgentRunConfig, CaseResult, RunStatus
+from mokioclaw.evals.models import AgentRunConfig, CaseResult, Limits, LimitsOverride, RunStatus, effective_limits
 from mokioclaw.evals.patches import create_patch
 from mokioclaw.evals.sandbox import DockerCommandExecutor
 from mokioclaw.evals.workspace import PreparedWorkspace, prepare_workspace
@@ -26,18 +26,19 @@ class EvalRunner:
         self.eval_root = self.project_root / "evals"
         self.runs_root = (runs_root or self.project_root / ".mokioclaw/eval-runs").resolve()
 
-    def run_case(self, case_path: Path, architecture: str = "multi-agent") -> CaseResult:
+    def run_case(self, case_path: Path, architecture: str = "multi-agent", limits_override: LimitsOverride | None = None) -> CaseResult:
         started = time.perf_counter()
         case = load_case(case_path)
+        limits = effective_limits(case.limits, limits_override)
         run_id = f"{case.id}-{uuid4().hex[:12]}"
         run_root = self.runs_root / run_id
         try:
             prepared = prepare_workspace(case, self.eval_root, run_root)
-            config = self._run_config(case, prepared, run_id, architecture)
+            config = self._run_config(case, prepared, run_id, architecture, limits)
             worker_config = run_root / "worker-config.json"
             worker_config.write_text(json.dumps(_config_payload(config), sort_keys=True), encoding="utf-8")
             artifacts_path = run_root / "run-artifacts.json"
-            worker_result = self._run_worker(config, worker_config, architecture, case.limits.agent_timeout_seconds)
+            worker_result = self._run_worker(config, worker_config, architecture, limits.agent_timeout_seconds)
             base_result = CaseResult(
                 run_id=run_id,
                 case_id=case.id,
@@ -96,7 +97,7 @@ class EvalRunner:
                 latency_ms=round((time.perf_counter() - started) * 1000),
             )
 
-    def _run_config(self, case, prepared: PreparedWorkspace, run_id: str, architecture: str) -> AgentRunConfig:
+    def _run_config(self, case, prepared: PreparedWorkspace, run_id: str, architecture: str, limits: Limits) -> AgentRunConfig:
         load_dotenv(self.project_root / ".env")
         model = os.getenv("MODEL", "")
         base_url = os.getenv("BASE_URL", "")
@@ -114,9 +115,9 @@ class EvalRunner:
             base_url_host=host,
             temperature=0.0,
             sandbox_image="mokioclaw-eval-python:3.13",
-            max_attempts=case.limits.max_attempts,
-            max_tool_calls=case.limits.max_tool_calls,
-            timeout_seconds=case.limits.agent_timeout_seconds,
+            max_attempts=limits.max_attempts,
+            max_tool_calls=limits.max_tool_calls,
+            timeout_seconds=limits.agent_timeout_seconds,
             protected_paths=tuple(str(path) for path in case.grader.protected_paths),
             verification_commands=tuple(case.public_verification.commands),
         )
