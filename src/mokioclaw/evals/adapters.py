@@ -134,19 +134,23 @@ def consume_adapter_events(
                 if payload.get("type") in ("tool_call", "tool_result"):
                     last_tool = str(payload.get("name") or "")
             if checkpoint_path is not None:
-                write_checkpoint(
-                    checkpoint_path,
-                    {
-                        "attempt": artifacts.attempts,
-                        "tool_calls": artifacts.tool_calls,
-                        "tool_errors": artifacts.tool_errors,
-                        "elapsed_seconds": round(time.perf_counter() - started, 3),
-                        "last_stage": last_stage,
-                        "last_tool": last_tool,
-                        "last_event_timestamp": datetime.now(timezone.utc).isoformat(),
-                        "verification_command_runs": artifacts.verification_command_runs,
-                    },
-                )
+                # Best-effort telemetry (spec 6.5): a failed checkpoint write must never abort the run.
+                try:
+                    write_checkpoint(
+                        checkpoint_path,
+                        {
+                            "attempt": artifacts.attempts,
+                            "tool_calls": artifacts.tool_calls,
+                            "tool_errors": artifacts.tool_errors,
+                            "elapsed_seconds": round(time.perf_counter() - started, 3),
+                            "last_stage": last_stage,
+                            "last_tool": last_tool,
+                            "last_event_timestamp": datetime.now(timezone.utc).isoformat(),
+                            "verification_command_runs": artifacts.verification_command_runs,
+                        },
+                    )
+                except Exception:
+                    pass
             if artifacts.tool_calls > config.max_tool_calls:
                 raise ToolBudgetExceeded(artifacts.tool_calls)
     finally:

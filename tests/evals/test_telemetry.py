@@ -75,3 +75,26 @@ def test_budget_tripping_event_is_checkpointed(tmp_path: Path) -> None:
     payload, warning = load_checkpoint(checkpoint_path)
     assert warning == ""
     assert payload["tool_calls"] == 41
+
+
+def test_checkpoint_write_failure_does_not_kill_run(tmp_path: Path, monkeypatch) -> None:
+    def exploding_write(path: Path, payload: dict) -> None:
+        raise RuntimeError("simulated checkpoint write failure")
+
+    monkeypatch.setattr("mokioclaw.evals.adapters.write_checkpoint", exploding_write)
+    events = [
+        {"type": "custom_event", "event": {"type": "tool_call", "name": "bash", "args": {"command": "pytest"}}},
+        {"type": "custom_event", "event": {"type": "tool_result", "name": "bash", "result": {"ok": False}}},
+        {"type": "graph_event", "event": {"verify": {"attempts": 1}}},
+    ]
+    config = AgentRunConfig(
+        run_id="r", case_id="c", task="t", workspace=tmp_path / "run" / "agent", architecture="react",
+        retrieval="grep", model="", base_url_host="", temperature=0.0, sandbox_image="img",
+        max_attempts=3, max_tool_calls=40, timeout_seconds=600,
+    )
+    artifacts = RunArtifacts()
+    consume_adapter_events(iter(events), config, artifacts, checkpoint_path=tmp_path / "run" / CHECKPOINT_NAME)
+    assert len(artifacts.events) == 3
+    assert artifacts.tool_calls == 1
+    assert artifacts.tool_errors == 1
+    assert artifacts.attempts == 1
