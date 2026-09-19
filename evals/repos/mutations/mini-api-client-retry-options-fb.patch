@@ -1,0 +1,142 @@
+diff --git a/src/mini_api/client.py b/src/mini_api/client.py
+index df8b85e..7297770 100644
+--- a/src/mini_api/client.py
++++ b/src/mini_api/client.py
+@@ -28,15 +28,9 @@ class MiniClient:
+     def __init__(self, transport: Transport | None = None) -> None:
+         self._transport = transport or _default_transport
+ 
+-    def request_json(
+-        self,
+-        path: str,
+-        *,
+-        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+-        retries: int = DEFAULT_RETRIES,
+-    ) -> Any:
+-        if timeout_seconds <= 0:
+-            raise ValueError("timeout_seconds must be positive")
+-        if retries < 0:
+-            raise ValueError("retries cannot be negative")
+-        return self._transport(path, timeout_seconds, retries)
++    def request_json(self, path: str) -> Any:
++        return self._transport(
++            path,
++            DEFAULT_TIMEOUT_SECONDS,
++            DEFAULT_RETRIES,
++        )
+diff --git a/tests/test_retry_options_public.py b/tests/test_retry_options_public.py
+new file mode 100644
+index 0000000..fa750e7
+--- /dev/null
++++ b/tests/test_retry_options_public.py
+@@ -0,0 +1,110 @@
++"""Public tests for the `timeout_seconds` / `retries` options on MiniClient.request_json.
++
++These tests cover exactly the behaviors stated in the source task (task.md):
++
++1. New keyword parameters ``timeout_seconds`` (default ``2.0``) and ``retries``
++   (default ``3``) on ``MiniClient.request_json``.
++2. The old single-argument call style ``request_json(path)`` remains compatible.
++3. Explicit parameter values are forwarded to the transport; omitted parameters
++   fall back to their declared defaults, which are forwarded as well.
++4. Illegal parameter values raise a clear error (ValueError or TypeError) instead
++   of being silently forwarded.
++
++The file is self-contained: it puts the workspace's ``src`` directory on
++``sys.path`` when run from its default location (a sibling of ``workspace/``).
++Run it with ``pytest v2-public-tests/test_retry_options_public.py``.
++"""
++
++from __future__ import annotations
++
++import sys
++from collections.abc import Callable
++from pathlib import Path
++from typing import Any
++
++_WORKSPACE_SRC = Path(__file__).resolve().parents[1] / "workspace" / "src"
++if _WORKSPACE_SRC.is_dir():
++    sys.path.insert(0, str(_WORKSPACE_SRC))
++
++import pytest
++
++from mini_api.client import MiniClient
++
++DEFAULT_TIMEOUT_SECONDS = 2.0
++DEFAULT_RETRIES = 3
++
++# task.md requires "illegal parameters must raise a clear error" without naming
++# the exception type; ValueError (the workspace convention, see pagination.py)
++# and TypeError (the standard error for wrong argument types) are both clear.
++ClearArgumentError = (ValueError, TypeError)
++
++Transport = Callable[[str, float, int], Any]
++
++
++def _recording_transport(calls: list[tuple[str, float, int]]) -> Transport:
++    def transport(path: str, timeout_seconds: float, retries: int) -> Any:
++        calls.append((path, timeout_seconds, retries))
++        return {"ok": True}
++
++    return transport
++
++
++def test_old_single_argument_call_remains_compatible() -> None:
++    calls: list[tuple[str, float, int]] = []
++    client = MiniClient(_recording_transport(calls))
++
++    result = client.request_json("/users")
++
++    assert result == {"ok": True}
++    assert len(calls) == 1
++    assert calls[0][0] == "/users"
++
++
++def test_defaults_are_forwarded_when_keywords_are_omitted() -> None:
++    calls: list[tuple[str, float, int]] = []
++    client = MiniClient(_recording_transport(calls))
++
++    result = client.request_json("/items")
++
++    assert result == {"ok": True}
++    assert calls == [("/items", DEFAULT_TIMEOUT_SECONDS, DEFAULT_RETRIES)]
++
++
++def test_explicit_timeout_and_retries_are_forwarded_to_transport() -> None:
++    calls: list[tuple[str, float, int]] = []
++    client = MiniClient(_recording_transport(calls))
++
++    result = client.request_json("/users", timeout_seconds=5.0, retries=1)
++
++    assert result == {"ok": True}
++    assert calls == [("/users", 5.0, 1)]
++
++
++def test_each_omitted_keyword_falls_back_to_its_own_default() -> None:
++    calls: list[tuple[str, float, int]] = []
++    client = MiniClient(_recording_transport(calls))
++
++    client.request_json("/only-timeout", timeout_seconds=9.5)
++    client.request_json("/only-retries", retries=2)
++
++    assert calls == [
++        ("/only-timeout", 9.5, DEFAULT_RETRIES),
++        ("/only-retries", DEFAULT_TIMEOUT_SECONDS, 2),
++    ]
++
++
++def test_non_positive_timeout_seconds_raises_a_clear_error() -> None:
++    client = MiniClient(_recording_transport([]))
++
++    with pytest.raises(ClearArgumentError):
++        client.request_json("/users", timeout_seconds=0.0)
++
++    with pytest.raises(ClearArgumentError):
++        client.request_json("/users", timeout_seconds=-1.0)
++
++
++def test_negative_retries_raises_a_clear_error() -> None:
++    client = MiniClient(_recording_transport([]))
++
++    with pytest.raises(ClearArgumentError):
++        client.request_json("/users", retries=-1)

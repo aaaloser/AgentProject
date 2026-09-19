@@ -1,0 +1,66 @@
+id: mini-api-client-retry-options-02b
+category: feature
+task: "# Enhanced Task: Add `timeout_seconds` and `retries` keyword parameters to `MiniClient.request_json`\n\n## Source task\
+  \ (verbatim, from `task.md`)\n\n> 为 MiniClient.request_json 增加 timeout_seconds 和 retries 关键字参数，默认值分别为 2.0 和 3。旧的单参数调用方式必须保持兼容，显式参数必须传递给\
+  \ transport，非法参数必须明确报错。\n\nEnglish gloss (for readability only; the Chinese text above is the normative source):\nAdd `timeout_seconds`\
+  \ and `retries` keyword parameters to `MiniClient.request_json`, with\ndefault values `2.0` and `3` respectively. The old\
+  \ single-argument call style must remain\ncompatible, explicit parameters must be passed to the transport, and illegal parameters\
+  \ must\nraise a clear error.\n\n## Target\n\n- The API to change is `MiniClient.request_json` in the `mini_api` package\n\
+  \  (`workspace/src/mini_api/client.py`). *(The API name is stated in the source task; the file\n  location is grounding\
+  \ from the workspace snapshot.)*\n- \"transport\" is the callable that `MiniClient` delegates each request to; the source\
+  \ task\n  requires the new parameters to reach it. *(Grounding: `workspace/src/mini_api/client.py`\n  defines `Transport`\
+  \ and currently forwards `(path, timeout_seconds, retries)`.)*\n- The workspace already defines module constants `DEFAULT_TIMEOUT_SECONDS\
+  \ = 2.0` and\n  `DEFAULT_RETRIES = 3`, consistent with the defaults required below. *(Grounding only — the\n  normative\
+  \ source for the defaults is the source task, not the constants.)*\n\n## Requirements\n\n### R1 — New keyword parameters\
+  \ with the stated defaults\n\n- `MiniClient.request_json` must accept a new keyword parameter `timeout_seconds` whose\n\
+  \  default value is `2.0`.\n  *(task.md: \"为 MiniClient.request_json 增加 timeout_seconds ... 关键字参数，默认值分别为 2.0 ...\")*\n-\
+  \ `MiniClient.request_json` must accept a new keyword parameter `retries` whose default value\n  is `3`.\n  *(task.md: \"\
+  ... 和 retries 关键字参数，默认值分别为 ... 3。\")*\n- The two are keyword parameters: callers pass them by name, e.g.\n  `request_json(path,\
+  \ timeout_seconds=..., retries=...)`.\n  *(task.md: \"关键字参数\")*\n\n### R2 — The old single-argument call style stays compatible\n\
+  \n- The existing call style — `request_json(path)` with `path` as the only argument — must keep\n  working unchanged.\n\
+  \  *(task.md: \"旧的单参数调用方式必须保持兼容\")*\n- In an old-style call, the parameters the caller omits take their declared defaults,\
+  \ so the\n  effective values are `timeout_seconds=2.0` and `retries=3`.\n  *(task.md sentences read together: the declared\
+  \ defaults — \"默认值分别为 2.0 和 3\"; the old\n  style still works — \"旧的单参数调用方式必须保持兼容\"; and the parameters are what the\n \
+  \ transport receives — \"显式参数必须传递给 transport\")*\n\n### R3 — Explicit parameters must be forwarded to the transport\n\n\
+  - When the caller passes `timeout_seconds` and/or `retries` explicitly, the transport must\n  receive exactly the values\
+  \ the caller supplied for those parameters.\n  *(task.md: \"显式参数必须传递给 transport\")*\n- When a parameter is omitted, the\
+  \ transport receives that parameter's default value\n  (`2.0` for `timeout_seconds`, `3` for `retries`).\n  *(task.md sentences\
+  \ 1 and 2 read together: \"默认值分别为 2.0 和 3\" + \"显式参数必须传递给\n  transport\")*\n\n### R4 — Illegal parameters must raise a clear\
+  \ error\n\n- Illegal (invalid) parameter values must not be silently accepted and must not be silently\n  forwarded; a call\
+  \ with such a value must fail with a clear, explicit error surfaced to the\n  caller.\n  *(task.md: \"非法参数必须明确报错\")*\n-\
+  \ The bar is clarity: the caller must get an explicit error about the invalid argument, not a\n  silent request and not\
+  \ an obscure failure from somewhere downstream.\n\n## Acceptance criteria\n\n1. `client.request_json(\"/x\")` succeeds and\
+  \ the transport observes `(\"/x\", 2.0, 3)`.\n   (R1, R2, R3)\n2. `client.request_json(\"/x\", timeout_seconds=5.0, retries=1)`\
+  \ makes the transport observe\n   `(\"/x\", 5.0, 1)`. (R3)\n3. Passing only one keyword leaves the other at its default:\n\
+  \   `request_json(\"/x\", retries=2)` → transport observes `(\"/x\", 2.0, 2)`;\n   `request_json(\"/x\", timeout_seconds=9.5)`\
+  \ → transport observes `(\"/x\", 9.5, 3)`. (R1, R3)\n4. Calling with an illegal `timeout_seconds` value or an illegal `retries`\
+  \ value raises a\n   clear error instead of silently forwarding the illegal value. (R4)\n\n## Deliberately left unspecified\n\
+  \nThe following are NOT specified by the source task and are intentionally not invented here;\nan implementation may choose\
+  \ freely as long as R1–R4 hold:\n\n- The exact set of illegal values covered by R4, and the exception type raised. The source\n\
+  \  task only requires \"明确报错\" (a clear error). For reference, the workspace's own convention\n  for invalid arguments is\
+  \ `ValueError` (see `workspace/src/mini_api/pagination.py`), and\n  Python's standard error for a value of the wrong type\
+  \ is `TypeError` — any error that is\n  clear to the caller satisfies the requirement.\n- Whether the new parameters must\
+  \ be keyword-only (enforced via `*` in the signature) or may\n  additionally be accepted positionally.\n- Any change to\
+  \ the transport's own behavior; the source task only constrains what values the\n  client passes to it.\n\n## Scope\n\n\
+  The source task states only the four requirement groups above (R1–R4); this enhancement adds\nno other behavior to `mini_api`.\n"
+repository:
+  template: mini_api
+  mutation: mini-api-client-retry-options.patch
+public_verification:
+  commands:
+  - python -m pytest -q
+grader:
+  id: mini_api.client_retry_options
+  hidden_tests: evals/graders/cases/mini_api/client_retry_options
+  protected_paths:
+  - tests/test_pagination.py
+  - tests/test_client.py
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths:
+  - .

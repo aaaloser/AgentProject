@@ -1,0 +1,24 @@
+id: mini-api-client-retry-options-02c
+category: feature
+task: 为 MiniClient.request_json 增加 timeout_seconds 和 retries 关键字参数，默认值分别为 2.0 和 3。旧的单参数调用方式必须保持兼容，显式参数必须传递给 transport，非法参数必须明确报错。
+repository:
+  template: mini_api
+  mutation: mini-api-client-retry-options-fb.patch
+public_verification:
+  commands:
+  - python -m pytest -q
+grader:
+  id: mini_api.client_retry_options
+  hidden_tests: evals/graders/cases/mini_api/client_retry_options
+  protected_paths:
+  - tests/test_pagination.py
+  - tests/test_client.py
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 120
+policy:
+  network: provider_only
+  writable_paths:
+  - .
