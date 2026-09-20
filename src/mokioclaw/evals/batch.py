@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from mokioclaw.evals.cases import load_case
-from mokioclaw.evals.models import CaseResult, EVAL_IMAGE, Limits, LimitsOverride, RunStatus, effective_limits
+from mokioclaw.evals.models import CaseResult, Limits, LimitsOverride, RunStatus, effective_limits, resolved_case_image
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
 from mokioclaw.evals.sandbox import DockerCommandExecutor
@@ -49,6 +49,16 @@ def _tree_hash(root: Path, pattern: str) -> str:
     return _sha256_bytes(json.dumps(entries, sort_keys=True).encode("utf-8"))
 
 
+def _validate_uniform_batch(spec: BatchSpec) -> None:
+    cases = [load_case(path) for path in spec.case_paths]
+    effective = [effective_limits(case.limits, spec.limits_override) for case in cases]
+    if effective and len(set(effective)) != 1:
+        raise RuntimeError("selected cases have mixed effective limits; refuse to start a mixed batch")
+    images = {resolved_case_image(case) for case in cases}
+    if len(images) > 1:
+        raise RuntimeError("selected cases have mixed resolved images; refuse to start a mixed batch")
+
+
 def build_experiment_fingerprint(spec: BatchSpec) -> dict[str, Any]:
     load_dotenv(spec.project_root / ".env")
     commit = subprocess.run(
@@ -56,15 +66,21 @@ def build_experiment_fingerprint(spec: BatchSpec) -> dict[str, Any]:
     ).stdout.strip()
     cases: dict[str, Any] = {}
     effective: list[Limits] = []
+    image_ids: dict[str, str] = {}
     for path in spec.case_paths:
         case = load_case(path)
         limits = effective_limits(case.limits, spec.limits_override)
         effective.append(limits)
+        image = resolved_case_image(case)
+        if image not in image_ids:
+            image_ids[image] = DockerCommandExecutor(image).image_id()
         cases[case.id] = {
             "yaml_sha256": _sha256_bytes(path.read_bytes()),
             "grader_tree_hash": _tree_hash(spec.project_root / case.grader.hidden_tests, "*"),
             "template_tree_hash": _tree_hash(spec.project_root / "evals" / "repos" / "templates" / case.repository.template, "*"),
             "mutation_sha256": _sha256_bytes((spec.project_root / "evals" / "repos" / "mutations" / case.repository.mutation).read_bytes()),
+            "image": image,
+            "image_digest": image_ids[image],
         }
     if effective and len(set(effective)) != 1:
         raise RuntimeError("selected cases have mixed effective limits; refuse to start a mixed batch")
@@ -77,10 +93,9 @@ def build_experiment_fingerprint(spec: BatchSpec) -> dict[str, Any]:
         "effective_limits": asdict(effective[0]) if effective else asdict(Limits()),
         "cases": cases,
         "src_hash": _tree_hash(spec.project_root / "src" / "mokioclaw", "*.py"),
-        "image_digest": DockerCommandExecutor(EVAL_IMAGE).image_id(),
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "identity": identity,
         "identity_fingerprint": _sha256_bytes(json.dumps(identity, sort_keys=True).encode("utf-8")),
         "provenance": {
@@ -104,16 +119,15 @@ def _load_completed(manifest_path: Path) -> set[tuple[str, str, int]]:
 
 
 def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
-    if spec.case_paths:
-        effective = [effective_limits(load_case(path).limits, spec.limits_override) for path in spec.case_paths]
-        if len(set(effective)) != 1:
-            raise RuntimeError("selected cases have mixed effective limits: run a batch whose cases share one limits profile")
+    _validate_uniform_batch(spec)
     output = spec.output_dir
     output.mkdir(parents=True, exist_ok=True)
     experiment_path = output / "experiment.json"
     fingerprint = build_experiment_fingerprint(spec)
     if experiment_path.exists():
         previous = json.loads(experiment_path.read_text(encoding="utf-8"))
+        if previous.get("schema_version") != fingerprint["schema_version"]:
+            raise RuntimeError("experiment schema version mismatch: start a new batch instead of resuming")
         if previous.get("identity_fingerprint") != fingerprint["identity_fingerprint"]:
             raise RuntimeError("experiment fingerprint mismatch: start a new batch instead of resuming")
     else:

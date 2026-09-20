@@ -35,10 +35,10 @@ def test_run_batch_refuses_fingerprint_mismatch(tmp_path: Path, monkeypatch) -> 
 
     case_path = _write_case(tmp_path)
     spec = BatchSpec(project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1, output_dir=tmp_path / "batch")
-    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 3, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
     (spec.output_dir).mkdir(parents=True)
     (spec.output_dir / "experiment.json").write_text(
-        json.dumps({"schema_version": 2, "identity": {}, "identity_fingerprint": "bbb", "provenance": {}}), encoding="utf-8"
+        json.dumps({"schema_version": 3, "identity": {}, "identity_fingerprint": "bbb", "provenance": {}}), encoding="utf-8"
     )
 
     try:
@@ -47,6 +47,23 @@ def test_run_batch_refuses_fingerprint_mismatch(tmp_path: Path, monkeypatch) -> 
     except RuntimeError as exc:
         raised = "fingerprint mismatch" in str(exc)
     assert raised
+
+
+def test_resume_rejects_schema_v2_even_if_fingerprint_text_matches(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+
+    case_path = _write_case_with_limits(tmp_path / "a", 40)
+    spec = BatchSpec(tmp_path, ["react"], [case_path], 1, tmp_path / "batch")
+    spec.output_dir.mkdir()
+    (spec.output_dir / "experiment.json").write_text(
+        json.dumps({"schema_version": 2, "identity_fingerprint": "same"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda _: {
+        "schema_version": 3, "identity": {}, "identity_fingerprint": "same", "provenance": {}
+    })
+    with pytest.raises(RuntimeError, match="schema version"):
+        run_batch(spec)
 
 
 def test_run_batch_skips_completed_and_appends_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -79,11 +96,12 @@ def test_run_batch_skips_completed_and_appends_manifest(tmp_path: Path, monkeypa
     assert manifest.read_text(encoding="utf-8").count("\n") == 1
 
 
-def _write_case_with_limits(case_dir: Path, max_tool_calls: int) -> Path:
+def _write_case_with_limits(case_dir: Path, max_tool_calls: int, image: str = "") -> Path:
     # exist_ok: callers such as _seed_case_tree pre-create the directory.
     case_dir.mkdir(parents=True, exist_ok=True)
     path = case_dir / "demo-case.yaml"
     path.write_text(
+        f"image: {json.dumps(image)}\n"
         "id: demo-case\ncategory: feature\ntask: t\n"
         "repository:\n  template: t\n  mutation: m\n"
         "public_verification:\n  commands: [python -m pytest -q]\n"
@@ -105,6 +123,17 @@ def test_run_batch_refuses_mixed_effective_limits(tmp_path: Path) -> None:
         run_batch(spec)
 
 
+def test_run_batch_refuses_mixed_resolved_images_before_creating_output(tmp_path: Path) -> None:
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+
+    case_a = _write_case_with_limits(tmp_path / "a", 40, image="image:a")
+    case_b = _write_case_with_limits(tmp_path / "b", 40, image="image:b")
+    spec = BatchSpec(tmp_path, ["react"], [case_a, case_b], 1, tmp_path / "batch")
+    with pytest.raises(RuntimeError, match="mixed resolved images"):
+        run_batch(spec)
+    assert not spec.output_dir.exists()
+
+
 def test_run_batch_passes_override_to_runner(tmp_path: Path, monkeypatch) -> None:
     from mokioclaw.evals import batch as batch_module
     from mokioclaw.evals.batch import BatchSpec, run_batch
@@ -122,7 +151,7 @@ def test_run_batch_passes_override_to_runner(tmp_path: Path, monkeypatch) -> Non
             return CaseResult(run_id="r1", case_id="demo-case", status=RunStatus.PASSED, success=True)
 
     monkeypatch.setattr(batch_module, "EvalRunner", FakeRunner)
-    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 3, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
     spec = BatchSpec(
         project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1,
         output_dir=tmp_path / "batch",
@@ -195,6 +224,30 @@ def _patch_external(monkeypatch, commit: str) -> None:
     monkeypatch.setattr(batch_module.subprocess, "run", fake_check)
 
 
+def test_fingerprint_v3_records_per_case_image_digest(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import build_experiment_fingerprint
+
+    _seed_case_tree(tmp_path)
+    _write_case_with_limits(tmp_path / "evals" / "cases", 40, image="image:rich")
+    _patch_external(monkeypatch, "abc123")
+
+    class ImageByName:
+        def __init__(self, image: str) -> None:
+            self.image = image
+
+        def image_id(self) -> str:
+            return f"sha256:{self.image.replace(':', '-')}"
+
+    monkeypatch.setattr(batch_module, "DockerCommandExecutor", ImageByName)
+    payload = build_experiment_fingerprint(_identity_spec(tmp_path, tmp_path / "evals"))
+    case_identity = payload["identity"]["cases"]["demo-case"]
+    assert payload["schema_version"] == 3
+    assert "image_digest" not in payload["identity"]
+    assert case_identity["image"] == "image:rich"
+    assert case_identity["image_digest"] == "sha256:image-rich"
+
+
 def test_fingerprint_ignores_unselected_files_and_commit(tmp_path: Path, monkeypatch) -> None:
     from mokioclaw.evals.batch import build_experiment_fingerprint
 
@@ -246,13 +299,15 @@ def test_fingerprint_identity_fields(tmp_path: Path, monkeypatch) -> None:
     _patch_external(monkeypatch, "abc123")
     payload = build_experiment_fingerprint(_identity_spec(tmp_path, tmp_path / "evals"))
 
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     identity = payload["identity"]
     assert identity["effective_limits"] == {"max_attempts": 3, "max_tool_calls": 40, "agent_timeout_seconds": 600, "command_timeout_seconds": 120}
     assert identity["architectures"] == ["react"]
     assert payload["provenance"]["git_commit"] == "abc123"
     demo = identity["cases"]["demo-case"]
-    assert set(demo) == {"yaml_sha256", "grader_tree_hash", "template_tree_hash", "mutation_sha256"}
+    assert set(demo) == {
+        "yaml_sha256", "grader_tree_hash", "template_tree_hash", "mutation_sha256", "image", "image_digest"
+    }
 
 
 def test_resume_allowed_when_identity_matches_but_commit_changed(tmp_path: Path, monkeypatch) -> None:
@@ -261,10 +316,10 @@ def test_resume_allowed_when_identity_matches_but_commit_changed(tmp_path: Path,
 
     case_path = _write_case_with_limits(tmp_path / "a", 40)
     spec = BatchSpec(project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1, output_dir=tmp_path / "batch")
-    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "same", "provenance": {"git_commit": "c1"}})
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 3, "identity": {}, "identity_fingerprint": "same", "provenance": {"git_commit": "c1"}})
     spec.output_dir.mkdir(parents=True)
     (spec.output_dir / "experiment.json").write_text(
-        json.dumps({"schema_version": 2, "identity": {}, "identity_fingerprint": "same", "provenance": {"git_commit": "c2"}}), encoding="utf-8"
+        json.dumps({"schema_version": 3, "identity": {}, "identity_fingerprint": "same", "provenance": {"git_commit": "c2"}}), encoding="utf-8"
     )
     # completed triple already in the manifest: resume is allowed and nothing re-runs
     (spec.output_dir / "manifest.jsonl").write_text(
@@ -283,7 +338,7 @@ def test_manifest_row_records_limits(tmp_path: Path, monkeypatch) -> None:
         project_root=tmp_path, architectures=["react"], case_paths=[case_path], repeat=1,
         output_dir=tmp_path / "batch", limits_override=LimitsOverride(max_tool_calls=80),
     )
-    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 2, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda s: {"schema_version": 3, "identity": {}, "identity_fingerprint": "aaa", "provenance": {}})
 
     class FakeRunner:
         def __init__(self, *, project_root) -> None:
