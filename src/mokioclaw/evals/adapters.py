@@ -25,6 +25,7 @@ class RunArtifacts:
     handoff_count: int = 0
     verification_command_runs: int = 0
     trace_path: str = ""
+    last_stage: str = ""
 
 
 class AgentAdapter(Protocol):
@@ -101,9 +102,11 @@ class MokioAgentAdapter:
                 artifacts.compression_count = _optional_int(payload.get("compression_count")) or 0
                 artifacts.handoff_count = _optional_int(payload.get("handoff_count")) or artifacts.handoff_count
         elif event_type == "graph_event" and isinstance(payload, dict):
-            for update in payload.values():
-                if isinstance(update, dict) and "attempts" in update:
-                    artifacts.attempts = _optional_int(update.get("attempts")) or artifacts.attempts
+            for stage, update in payload.items():
+                if isinstance(update, dict):
+                    artifacts.last_stage = str(stage)
+                    if "attempts" in update:
+                        artifacts.attempts = _optional_int(update.get("attempts")) or artifacts.attempts
 
 
 _record_event = MokioAgentAdapter._record_event
@@ -118,7 +121,6 @@ def consume_adapter_events(
     checkpoint_path: Path | None = None,
 ) -> None:
     started = time.perf_counter()
-    last_stage = ""
     last_tool = ""
     try:
         for event in events:
@@ -126,11 +128,7 @@ def consume_adapter_events(
             _record_event(artifacts, event, verification_commands)
             event_type = event.get("type")
             payload = event.get("event")
-            if event_type == "graph_event" and isinstance(payload, dict):
-                stage_keys = [key for key, value in payload.items() if isinstance(value, dict)]
-                if stage_keys:
-                    last_stage = stage_keys[-1]
-            elif event_type == "custom_event" and isinstance(payload, dict):
+            if event_type == "custom_event" and isinstance(payload, dict):
                 if payload.get("type") in ("tool_call", "tool_result"):
                     last_tool = str(payload.get("name") or "")
             if checkpoint_path is not None:
@@ -143,7 +141,7 @@ def consume_adapter_events(
                             "tool_calls": artifacts.tool_calls,
                             "tool_errors": artifacts.tool_errors,
                             "elapsed_seconds": round(time.perf_counter() - started, 3),
-                            "last_stage": last_stage,
+                            "last_stage": artifacts.last_stage,
                             "last_tool": last_tool,
                             "last_event_timestamp": datetime.now(timezone.utc).isoformat(),
                             "verification_command_runs": artifacts.verification_command_runs,

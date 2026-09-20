@@ -105,6 +105,15 @@ def test_record_event_counts_verification_commands() -> None:
     assert artifacts.tool_calls == 2
 
 
+def test_record_event_tracks_latest_graph_stage() -> None:
+    artifacts = RunArtifacts()
+    MokioAgentAdapter._record_event(artifacts, {"type": "graph_event", "event": {"planner": {}}})
+    MokioAgentAdapter._record_event(artifacts, {"type": "graph_event", "event": {"verifier": {"attempts": 1}}})
+
+    assert artifacts.last_stage == "verifier"
+    assert artifacts.attempts == 1
+
+
 def test_run_artifacts_no_longer_has_first_pass_success() -> None:
     assert "first_pass_success" not in RunArtifacts.__dataclass_fields__
     assert "handoff_count" in RunArtifacts.__dataclass_fields__

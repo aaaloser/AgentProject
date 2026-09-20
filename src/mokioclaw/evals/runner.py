@@ -202,6 +202,8 @@ def _apply_worker_metrics(result: CaseResult, worker_result: dict[str, Any]) -> 
         result.artifacts["trace"] = str(trace_path)
     result.metadata["handoff_count"] = int(artifacts.get("handoff_count", 0) or 0)
     result.metadata["verification_command_runs"] = int(artifacts.get("verification_command_runs", 0) or 0)
+    last_stage = str(artifacts.get("last_stage") or (worker_result.get("checkpoint") or {}).get("last_stage") or "")
+    result.metadata["last_stage"] = last_stage
     result.metadata["token_coverage"] = "full" if result.input_tokens is not None else "unavailable"
     if worker_result.get("checkpoint"):
         result.metadata["checkpoint"] = worker_result["checkpoint"]

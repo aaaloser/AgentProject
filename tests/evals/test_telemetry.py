@@ -47,13 +47,15 @@ def test_consume_adapter_events_writes_checkpoint_per_event(tmp_path: Path) -> N
         max_attempts=3, max_tool_calls=40, timeout_seconds=600,
     )
     checkpoint_path = tmp_path / "run" / CHECKPOINT_NAME
-    consume_adapter_events(iter(events), config, RunArtifacts(), checkpoint_path=checkpoint_path)
+    artifacts = RunArtifacts()
+    consume_adapter_events(iter(events), config, artifacts, checkpoint_path=checkpoint_path)
     payload, warning = load_checkpoint(checkpoint_path)
     assert warning == ""
     assert payload["tool_calls"] == 1
     assert payload["attempt"] == 2
     assert payload["last_stage"] == "verify"
     assert payload["last_tool"] == "bash"
+    assert artifacts.last_stage == "verify"
     assert set(payload) == {
         "attempt", "tool_calls", "tool_errors", "elapsed_seconds",
         "last_stage", "last_tool", "last_event_timestamp", "verification_command_runs",

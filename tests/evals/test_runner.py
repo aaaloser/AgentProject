@@ -122,6 +122,31 @@ def test_apply_worker_metrics_propagates_artifact_fields() -> None:
     assert result.metadata["token_coverage"] == "full"
 
 
+def test_apply_worker_metrics_records_completed_last_stage() -> None:
+    result = CaseResult(run_id="r", case_id="c", status=RunStatus.PASSED, success=False)
+
+    _apply_worker_metrics(result, {
+        "status": RunStatus.PASSED,
+        "tool_calls": 3,
+        "artifacts": {"attempts": 1, "last_stage": "verify"},
+    })
+
+    assert result.metadata["last_stage"] == "verify"
+
+
+def test_apply_worker_metrics_falls_back_to_checkpoint_last_stage() -> None:
+    result = CaseResult(run_id="r", case_id="c", status=RunStatus.TIMED_OUT, success=False)
+
+    _apply_worker_metrics(result, {
+        "status": RunStatus.TIMED_OUT,
+        "tool_calls": 3,
+        "artifacts": {"attempts": 1},
+        "checkpoint": {"last_stage": "planner"},
+    })
+
+    assert result.metadata["last_stage"] == "planner"
+
+
 def test_apply_worker_metrics_marks_tokens_unavailable() -> None:
     result = CaseResult(run_id="r", case_id="c", status=RunStatus.PASSED, success=False)
 
