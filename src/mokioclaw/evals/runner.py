@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from mokioclaw.evals.cases import load_case
 from mokioclaw.evals.grader import grade_case
-from mokioclaw.evals.models import AgentRunConfig, CaseResult, Limits, LimitsOverride, RunStatus, effective_limits
+from mokioclaw.evals.models import AgentRunConfig, CaseResult, Limits, LimitsOverride, RunStatus, effective_limits, resolved_case_image
 from mokioclaw.evals.patches import create_patch
 from mokioclaw.evals.sandbox import DockerCommandExecutor
 from mokioclaw.evals.telemetry import CHECKPOINT_NAME, load_checkpoint
@@ -115,7 +115,7 @@ class EvalRunner:
             model=model,
             base_url_host=host,
             temperature=0.0,
-            sandbox_image="mokioclaw-eval-python:3.13",
+            sandbox_image=resolved_case_image(case),
             max_attempts=limits.max_attempts,
             max_tool_calls=limits.max_tool_calls,
             timeout_seconds=limits.agent_timeout_seconds,

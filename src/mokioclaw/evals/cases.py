@@ -37,6 +37,7 @@ def _build_case(raw: dict[str, Any]) -> CaseSpec:
             hidden_tests=Path(str(grader.get("hidden_tests", ""))),
             protected_paths=tuple(Path(str(item)) for item in grader.get("protected_paths", [])),
         ),
+        image=str(raw.get("image", "")).strip(),
         limits=Limits(**limits),
         policy=Policy(
             network=str(policy.get("network", "provider_only")),

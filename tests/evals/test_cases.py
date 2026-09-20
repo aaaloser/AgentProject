@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from mokioclaw.evals.cases import load_case
-from mokioclaw.evals.models import RunStatus
+from mokioclaw.evals.models import EVAL_IMAGE, RunStatus, resolved_case_image
 
 
 VALID_CASE = """
@@ -41,6 +41,26 @@ def test_load_case_returns_typed_contract(tmp_path: Path) -> None:
     assert case.limits.max_tool_calls == 40
     assert case.policy.network == "provider_only"
     assert case.public_verification.commands == ("python -m pytest -q",)
+
+
+def test_load_case_parses_explicit_image(tmp_path: Path) -> None:
+    path = tmp_path / "case.yaml"
+    path.write_text("image: mokioclaw-eval-rich:14.3.4\n" + VALID_CASE, encoding="utf-8")
+
+    case = load_case(path)
+
+    assert case.image == "mokioclaw-eval-rich:14.3.4"
+    assert resolved_case_image(case) == "mokioclaw-eval-rich:14.3.4"
+
+
+def test_load_case_missing_or_blank_image_uses_default(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.yaml"
+    missing.write_text(VALID_CASE, encoding="utf-8")
+    blank = tmp_path / "blank.yaml"
+    blank.write_text("image: '  '\n" + VALID_CASE, encoding="utf-8")
+
+    assert resolved_case_image(load_case(missing)) == EVAL_IMAGE
+    assert resolved_case_image(load_case(blank)) == EVAL_IMAGE
 
 
 @pytest.mark.parametrize(

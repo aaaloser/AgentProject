@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
+EVAL_IMAGE = "mokioclaw-eval-python:3.13"
+
+
 class RunStatus(str, Enum):
     PASSED = "passed"
     FAILED = "failed"
@@ -73,8 +76,13 @@ class CaseSpec:
     repository: RepositorySpec
     public_verification: VerificationSpec
     grader: GraderSpec
+    image: str = ""
     limits: Limits = Limits()
     policy: Policy = Policy()
+
+
+def resolved_case_image(case: CaseSpec) -> str:
+    return case.image.strip() or EVAL_IMAGE
 
 
 @dataclass(frozen=True)

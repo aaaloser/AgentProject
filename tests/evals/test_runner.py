@@ -82,6 +82,15 @@ def test_run_config_loads_provider_settings_from_project_dotenv(tmp_path: Path, 
     assert os.environ["API_KEY"] == "test-key"
 
 
+def test_run_config_uses_case_image(tmp_path: Path) -> None:
+    case = load_case(case_with(tmp_path, "category: bugfix", "image: mokioclaw-eval-rich:14.3.4\ncategory: bugfix"))
+    prepared = PreparedWorkspace(tmp_path / "run", tmp_path / "baseline", tmp_path / "agent")
+
+    config = EvalRunner(project_root=PROJECT_ROOT)._run_config(case, prepared, "run-id", "react", case.limits)
+
+    assert config.sandbox_image == "mokioclaw-eval-rich:14.3.4"
+
+
 def test_apply_worker_metrics_propagates_artifact_fields() -> None:
     result = CaseResult(run_id="r", case_id="c", status=RunStatus.PASSED, success=False)
     worker_result = {

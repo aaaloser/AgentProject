@@ -13,13 +13,10 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from mokioclaw.evals.cases import load_case
-from mokioclaw.evals.models import CaseResult, Limits, LimitsOverride, RunStatus, effective_limits
+from mokioclaw.evals.models import CaseResult, EVAL_IMAGE, Limits, LimitsOverride, RunStatus, effective_limits
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
 from mokioclaw.evals.sandbox import DockerCommandExecutor
-
-EVAL_IMAGE = "mokioclaw-eval-python:3.13"
-
 
 @dataclass(frozen=True)
 class BatchSpec:
