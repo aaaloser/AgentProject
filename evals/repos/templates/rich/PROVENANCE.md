@@ -45,3 +45,44 @@ The upstream `.git/`, `.github/`, `docs/`, `assets/`, `benchmarks/`, `examples/`
 - `rich-markdown-hyperlinks-option-01`: the controller path is task → `repro_markdown_hyperlinks.py` → `Markdown.__init__` → `self.hyperlinks`; the mutation is one behavior line and the reference patch is one inverse line. The public bridge and repro share `render_disabled_link()`.
 - The upstream `tests/test_markdown_no_hyperlinks.py` is the exact golden-output contract being challenged by this synthetic mutation, so the mutation-only controller smoke excludes that one target while keeping the remaining 951 upstream tests green. The formal Case public command remains `python -m pytest -q` and therefore records the red signal; the reference patch passes the full public command and hidden tests.
 - `rich-table-no-edge-measure-02`: the controller path is task → `repro_table_no_edge_measure.py` → `Table._extra_width`; the mutation and reference are one inverse condition line. The mutation-only unrelated-suite smoke excludes the two upstream golden render tests (`tests/test_card.py`, `tests/test_table.py`) that directly encode the changed width contract; the remaining vendor tests stay green. The full Case public command and the three hidden measurement groups pass with the reference patch.
+
+## M1 acceptance (2026-09-20)
+
+The two Cases use the same Docker helper (`mokioclaw-eval-rich:14.3.4`,
+300-second command cap, 12,000-character output cap). The exact public command
+is intentionally the Case contract: it is red in the mutated bug state because
+the vendored upstream golden test(s) directly assert the behavior being
+challenged, and green after the reference patch. The deterministic upstream
+health smoke excludes only those target golden tests and the public bridge:
+
+| Case | Mutated exact pytest | Mutated repro | Mutated hidden | Unrelated upstream smoke | Reference exact pytest/repro/hidden | Import source |
+| --- | --- | --- | --- | --- | --- | --- |
+| `rich-markdown-hyperlinks-option-01` | red | red | red | green | green / green / green | `/workspace/rich/__init__.py` |
+| `rich-table-no-edge-measure-02` | red | red | red | green | green / green / green | `/workspace/rich/__init__.py` |
+
+The timing gate ran each fixed-state public command three times under the same
+image and resource limits:
+
+| Case | `python -m pytest -q` (ms) | standalone repro (ms) |
+| --- | --- | --- |
+| `rich-markdown-hyperlinks-option-01` | 10,331 / 9,186 / 8,990 | 612 / 654 / 696 |
+| `rich-table-no-edge-measure-02` | 9,925 / 9,234 / 9,344 | 625 / 593 / 639 |
+
+All twelve timings are below the 90,000 ms M1′ admission threshold. A
+temporary byte-exact production edit (the mutation line) made both public
+paths red, and restoring the saved bytes made both green for each Case. The
+default pytest command and standalone repro therefore expose the same public
+failure; the equivalence test asserts the frozen `CaseSpec.public_verification`
+commands rather than relying on model behavior.
+
+Controller localization and patch-size evidence:
+
+- Markdown grep path: `Markdown.__init__` → `self.hyperlinks`; Table grep path:
+  `Table._extra_width` → `self.box`/`self.show_edge`.
+- Each mutation and reference patch changes exactly one production condition or
+  assignment line; each reference patch is one changed line (well below the
+  40-line limit).
+- `tests`, both repro files, `LICENSE`, `PROVENANCE.md`, absent hook paths,
+  symlink entries, and runtime-cache exceptions are included in the protected
+  manifest contract. No hidden test or repro file is added to the agent
+  workspace during grading.
