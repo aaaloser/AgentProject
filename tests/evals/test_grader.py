@@ -5,6 +5,7 @@ import subprocess
 import time
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,81 @@ def test_modified_protected_public_test_fails_integrity_check(tmp_path: Path) ->
     patch = create_patch(prepared, prepared.run_root / "final.patch")
     checks = grade_case(case, prepared, patch, EVAL_ROOT, LocalCommandExecutor())
 
+    assert check_map(checks)["integrity"].passed is False
+
+
+def test_protected_directory_detects_missing_modified_and_added_files(tmp_path: Path) -> None:
+    for action in ("missing", "modified", "added"):
+        case, prepared = prepare_case(tmp_path, action)
+        case = replace(case, grader=replace(case.grader, protected_paths=(Path("tests"),)))
+        target = prepared.agent / "tests/test_pagination.py"
+        if action == "missing":
+            target.unlink()
+        elif action == "modified":
+            target.write_text("def test_disabled(): pass\n", encoding="utf-8")
+        else:
+            (prepared.agent / "tests/extra.py").write_text("x = 1\n", encoding="utf-8")
+        checks = grade_case(
+            case, prepared, create_patch(prepared, prepared.run_root / "final.patch"), EVAL_ROOT, LocalCommandExecutor()
+        )
+        assert check_map(checks)["integrity"].passed is False
+
+
+def test_protected_manifest_ignores_runtime_caches(tmp_path: Path) -> None:
+    case, prepared = prepare_case(tmp_path, "cache")
+    case = replace(case, grader=replace(case.grader, protected_paths=(Path("tests"),)))
+    (prepared.agent / "tests/__pycache__").mkdir()
+    (prepared.agent / "tests/__pycache__/x.pyc").write_bytes(b"cache")
+    (prepared.agent / "tests/.pytest_cache").mkdir()
+    (prepared.agent / "tests/.pytest_cache/state").write_text("cache", encoding="utf-8")
+    checks = grade_case(
+        case, prepared, create_patch(prepared, prepared.run_root / "final.patch"), EVAL_ROOT, LocalCommandExecutor()
+    )
+    assert check_map(checks)["integrity"].passed is True
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+def test_baseline_absent_protected_path_must_remain_absent(tmp_path: Path, kind: str) -> None:
+    case, prepared = prepare_case(tmp_path, f"absent-{kind}")
+    case = replace(case, grader=replace(case.grader, protected_paths=(Path("conftest.py"),)))
+    target = prepared.agent / "conftest.py"
+    if kind == "file":
+        target.write_text("x = 1\n", encoding="utf-8")
+    elif kind == "directory":
+        target.mkdir()
+    else:
+        try:
+            target.symlink_to("missing-target.py")
+        except OSError:
+            pytest.skip("symlink creation unavailable")
+    checks = grade_case(
+        case, prepared, create_patch(prepared, prepared.run_root / "final.patch"), EVAL_ROOT, LocalCommandExecutor()
+    )
+    assert check_map(checks)["integrity"].passed is False
+
+
+def test_protected_file_replaced_by_symlink_fails_integrity(tmp_path: Path) -> None:
+    case, prepared = prepare_case(tmp_path, "file-to-symlink")
+    case = replace(case, grader=replace(case.grader, protected_paths=(Path("tests/test_pagination.py"),)))
+    target = prepared.agent / "tests/test_pagination.py"
+    target.unlink()
+    try:
+        target.symlink_to("test_cli.py")
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    checks = grade_case(
+        case, prepared, create_patch(prepared, prepared.run_root / "final.patch"), EVAL_ROOT, LocalCommandExecutor()
+    )
+    assert check_map(checks)["integrity"].passed is False
+
+
+def test_protected_directory_new_empty_directory_fails_integrity(tmp_path: Path) -> None:
+    case, prepared = prepare_case(tmp_path, "empty-directory")
+    case = replace(case, grader=replace(case.grader, protected_paths=(Path("tests"),)))
+    (prepared.agent / "tests/new-empty").mkdir()
+    checks = grade_case(
+        case, prepared, create_patch(prepared, prepared.run_root / "final.patch"), EVAL_ROOT, LocalCommandExecutor()
+    )
     assert check_map(checks)["integrity"].passed is False
 
 
