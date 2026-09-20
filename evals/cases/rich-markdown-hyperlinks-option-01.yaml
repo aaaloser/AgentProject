@@ -1,0 +1,32 @@
+id: rich-markdown-hyperlinks-option-01
+category: bugfix
+task: 修复 Markdown 在 hyperlinks=False 时不显示链接目标的问题；保持默认 hyperlinks=True、文本样式和其他 Markdown 渲染行为不变。公开复现：python repro_markdown_hyperlinks.py。
+image: mokioclaw-eval-rich:14.3.4
+repository:
+  template: rich
+  mutation: rich-markdown-hyperlinks-option-01.patch
+public_verification:
+  commands:
+    - python -m pytest -q
+    - python repro_markdown_hyperlinks.py
+grader:
+  id: rich.markdown_hyperlinks
+  hidden_tests: evals/graders/cases/rich/markdown_hyperlinks
+  protected_paths:
+    - tests
+    - pyproject.toml
+    - repro_markdown_hyperlinks.py
+    - LICENSE
+    - PROVENANCE.md
+    - conftest.py
+    - sitecustomize.py
+    - usercustomize.py
+    - tests_hidden
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 300
+policy:
+  network: provider_only
+  writable_paths: [.]

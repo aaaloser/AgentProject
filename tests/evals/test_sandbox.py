@@ -22,6 +22,8 @@ def test_docker_executor_uses_offline_restricted_mount(monkeypatch, tmp_path: Pa
     )
 
     args = calls[0][0]
+    assert calls[0][1]["encoding"] == "utf-8"
+    assert calls[0][1]["errors"] == "replace"
     assert ["--network", "none"] == args[args.index("--network") : args.index("--network") + 2]
     assert "--cap-drop" in args and "ALL" in args
     assert "--read-only" in args

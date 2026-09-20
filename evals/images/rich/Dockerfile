@@ -5,3 +5,4 @@ RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.l
 
 ENV PYTHONPATH=/workspace
 WORKDIR /workspace
+ENTRYPOINT ["/bin/sh", "-lc"]

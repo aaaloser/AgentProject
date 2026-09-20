@@ -1,0 +1,10 @@
+diff --git a/rich/markdown.py b/rich/markdown.py
+--- a/rich/markdown.py
++++ b/rich/markdown.py
+@@ -561,5 +561,5 @@ class Markdown:
+         self.justify: JustifyMethod | None = justify
+         self.style = style
+-        self.hyperlinks = True
++        self.hyperlinks = hyperlinks
+         self.inline_code_lexer = inline_code_lexer
+         self.inline_code_theme = inline_code_theme or code_theme
