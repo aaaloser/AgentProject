@@ -1,0 +1,4 @@
+attrs==25.4.0
+markdown-it-py==3.0.0
+pygments==2.19.2
+pytest==9.0.3
