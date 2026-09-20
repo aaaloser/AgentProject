@@ -1,0 +1,32 @@
+id: rich-table-no-edge-measure-02
+category: bugfix
+task: 修复 Table(show_edge=False) 的宽度测量仍计入左右边缘的问题；保持 show_edge=True、列间分隔和实际渲染内容不变。公开复现：python repro_table_no_edge_measure.py。
+image: mokioclaw-eval-rich:14.3.4
+repository:
+  template: rich
+  mutation: rich-table-no-edge-measure-02.patch
+public_verification:
+  commands:
+    - python -m pytest -q
+    - python repro_table_no_edge_measure.py
+grader:
+  id: rich.table_measure
+  hidden_tests: evals/graders/cases/rich/table_measure
+  protected_paths:
+    - tests
+    - pyproject.toml
+    - repro_table_no_edge_measure.py
+    - LICENSE
+    - PROVENANCE.md
+    - conftest.py
+    - sitecustomize.py
+    - usercustomize.py
+    - tests_hidden
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 300
+policy:
+  network: provider_only
+  writable_paths: [.]

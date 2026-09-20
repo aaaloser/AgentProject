@@ -17,8 +17,10 @@ from mokioclaw.evals.workspace import PreparedWorkspace, prepare_workspace
 PROJECT_ROOT = Path(__file__).parents[2]
 EVAL_ROOT = PROJECT_ROOT / "evals"
 CASE_PATH = EVAL_ROOT / "cases/rich-markdown-hyperlinks-option-01.yaml"
+TABLE_CASE_PATH = EVAL_ROOT / "cases/rich-table-no-edge-measure-02.yaml"
 MUTATION = EVAL_ROOT / "repos/mutations/rich-markdown-hyperlinks-option-01.patch"
 REFERENCE = EVAL_ROOT / "repos/reference-patches/rich-markdown-hyperlinks-option-01.patch"
+TABLE_REFERENCE = EVAL_ROOT / "repos/reference-patches/rich-table-no-edge-measure-02.patch"
 
 
 def _case() -> CaseSpec:
@@ -75,6 +77,53 @@ def test_markdown_hyperlinks_reference_patch_passes_public_and_hidden(tmp_path: 
     prepared = prepare_workspace(case, EVAL_ROOT, tmp_path / "reference")
     subprocess.run(
         ["git", "apply", "--whitespace=error", str(REFERENCE)],
+        cwd=prepared.agent,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GIT_DIR": "/dev/null"},
+    )
+    checks = _checks(_grade(case, prepared))
+
+    assert all(check.passed for check in checks.values()), checks
+
+
+@pytest.mark.docker
+def test_table_no_edge_mutation_breaks_repro_and_hidden(tmp_path: Path) -> None:
+    case = load_case(TABLE_CASE_PATH)
+    prepared = prepare_workspace(case, EVAL_ROOT, tmp_path / "mutated-table")
+    executor = _executor(case)
+    native = executor.run(
+        workspace=prepared.agent,
+        # These two upstream golden-render tests directly encode the width
+        # contract under mutation; keep the unrelated vendor suite isolated.
+        command=(
+            "python -m pytest -q --ignore=tests/test_public_repro_table_no_edge_measure.py "
+            "--ignore=tests/test_card.py --ignore=tests/test_table.py"
+        ),
+        timeout_seconds=case.limits.command_timeout_seconds,
+        max_output_chars=6000,
+    )
+    repro = executor.run(
+        workspace=prepared.agent,
+        command="python repro_table_no_edge_measure.py",
+        timeout_seconds=case.limits.command_timeout_seconds,
+        max_output_chars=6000,
+    )
+    checks = _checks(_grade(case, prepared))
+
+    assert native["ok"] is True, native
+    assert repro["ok"] is False
+    assert checks["integrity"].passed is True
+    assert checks["public_regression"].passed is False
+
+
+@pytest.mark.docker
+def test_table_no_edge_reference_patch_passes_public_and_hidden(tmp_path: Path) -> None:
+    case = load_case(TABLE_CASE_PATH)
+    prepared = prepare_workspace(case, EVAL_ROOT, tmp_path / "reference-table")
+    subprocess.run(
+        ["git", "apply", "--whitespace=error", str(TABLE_REFERENCE)],
         cwd=prepared.agent,
         check=True,
         capture_output=True,

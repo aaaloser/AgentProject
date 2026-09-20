@@ -1,0 +1,11 @@
+diff --git a/rich/table.py b/rich/table.py
+--- a/rich/table.py
++++ b/rich/table.py
+@@ -296,6 +296,6 @@ class Table:
+         """Get extra width to add to cell content."""
+         width = 0
+-        if self.box:
++        if self.box and self.show_edge:
+             width += 2
+         if self.box:
+             width += len(self.columns) - 1

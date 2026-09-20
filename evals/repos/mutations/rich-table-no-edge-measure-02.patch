@@ -1,0 +1,43 @@
+diff --git a/rich/table.py b/rich/table.py
+--- a/rich/table.py
++++ b/rich/table.py
+@@ -296,6 +296,6 @@ class Table:
+         """Get extra width to add to cell content."""
+         width = 0
+-        if self.box and self.show_edge:
++        if self.box:
+             width += 2
+         if self.box:
+             width += len(self.columns) - 1
+diff --git a/repro_table_no_edge_measure.py b/repro_table_no_edge_measure.py
+new file mode 100644
+--- /dev/null
++++ b/repro_table_no_edge_measure.py
+@@ -0,0 +1,17 @@
++from rich import box
++from rich.console import Console
++from rich.measure import Measurement
++from rich.table import Table
++
++
++def measured_maximum(show_edge: bool) -> int:
++    console = Console(width=80, color_system=None, legacy_windows=False)
++    table = Table(box=box.SIMPLE, show_edge=show_edge)
++    table.add_column("name")
++    table.add_column("value")
++    table.add_row("alpha", "12345")
++    return Measurement.get(console, console.options, table).maximum
++
++
++if __name__ == "__main__":
++    assert measured_maximum(False) == measured_maximum(True) - 2
+diff --git a/tests/test_public_repro_table_no_edge_measure.py b/tests/test_public_repro_table_no_edge_measure.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_public_repro_table_no_edge_measure.py
+@@ -0,0 +1,5 @@
++from repro_table_no_edge_measure import measured_maximum
++
++
++def test_no_edge_measurement_excludes_outer_edges() -> None:
++    assert measured_maximum(False) == measured_maximum(True) - 2
