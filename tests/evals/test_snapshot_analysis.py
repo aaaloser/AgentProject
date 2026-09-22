@@ -214,6 +214,25 @@ def test_single_case_writer_omits_formal_pooled_labels(tmp_path: Path) -> None:
     assert "states" not in pooled
     assert "q1" not in pooled
     assert "q2" not in pooled
+    report = paths["report"].read_text(encoding="utf-8")
+    assert "Pooled states" not in report
+    assert "## Q1" not in report
+    assert "## Q2" not in report
+
+
+def test_incomplete_two_case_writer_refuses_formal_effect_labels(tmp_path: Path) -> None:
+    paths = write_snapshot_analysis(tmp_path / "incomplete-two-case")
+    pooled = json.loads(paths["pooled"].read_text(encoding="utf-8"))
+
+    assert pooled["branch"] == "two_case"
+    assert pooled["status"] == "incomplete"
+    assert "states" not in pooled
+    assert "q1" not in pooled
+    assert "q2" not in pooled
+    report = paths["report"].read_text(encoding="utf-8")
+    assert "Pooled states" not in report
+    assert "## Q1" not in report
+    assert "## Q2" not in report
 
 
 def test_react_attrition_is_not_an_input_to_other_architecture_qualification() -> None:

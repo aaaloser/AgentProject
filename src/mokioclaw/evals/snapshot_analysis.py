@@ -593,6 +593,15 @@ def _build_pooled(cell_data: dict[str, dict[str, Any]], warnings: list[str]) -> 
             "mixed_direction": per_case["mixed_direction"],
             "warnings": list(warnings),
         }
+    if incomplete:
+        return {
+            "schema_version": 1,
+            "branch": "two_case",
+            "status": "incomplete",
+            "incomplete": incomplete,
+            "cells": cells,
+            "warnings": list(warnings),
+        }
     states: dict[str, dict[str, Any]] = {}
     q1: dict[str, Any] = {}
     for architecture in ("multi-agent", "plan-execute"):
@@ -652,6 +661,8 @@ def _write_report(pooled: dict[str, Any], per_case: dict[str, Any], records: Ite
                 f"- Qualification: {pooled['comparison_qualification']}",
             ]
         )
+    elif pooled.get("status") == "incomplete":
+        lines.extend(["", "## Analysis status", "", "- Incomplete batch; formal effect labels were withheld."])
     else:
         lines.extend(["", "## Pooled states", "", "| Architecture | Cell | State | Relief | Failure migration |", "|---|---|---|---|---|"])
         for architecture, state_map in pooled["states"].items():
