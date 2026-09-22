@@ -83,7 +83,7 @@ def test_run_batch_skips_completed_and_appends_manifest(tmp_path: Path, monkeypa
 
     executed: list[tuple[str, str, int]] = []
 
-    def fake_run_case(self, case, architecture="multi-agent"):
+    def fake_run_case(self, case, architecture="multi-agent", limits_override=None, **kwargs):
         executed.append((architecture, case.stem))
         return CaseResult(run_id=f"{architecture}-x", case_id="demo-case", status=RunStatus.PASSED, success=True)
 
@@ -145,7 +145,7 @@ def test_run_batch_passes_override_to_runner(tmp_path: Path, monkeypatch) -> Non
         def __init__(self, *, project_root) -> None:
             captured["project_root"] = project_root
 
-        def run_case(self, case_path, architecture="multi-agent", limits_override=None):
+        def run_case(self, case_path, architecture="multi-agent", limits_override=None, **kwargs):
             captured["limits_override"] = limits_override
             from mokioclaw.evals.models import CaseResult, RunStatus
             return CaseResult(run_id="r1", case_id="demo-case", status=RunStatus.PASSED, success=True)
@@ -344,7 +344,7 @@ def test_manifest_row_records_limits(tmp_path: Path, monkeypatch) -> None:
         def __init__(self, *, project_root) -> None:
             pass
 
-        def run_case(self, case_path, architecture="multi-agent", limits_override=None):
+        def run_case(self, case_path, architecture="multi-agent", limits_override=None, **kwargs):
             from mokioclaw.evals.models import CaseResult, RunStatus
             return CaseResult(run_id="r1", case_id="demo-case", status=RunStatus.PASSED, success=True)
 
@@ -352,3 +352,128 @@ def test_manifest_row_records_limits(tmp_path: Path, monkeypatch) -> None:
     run_batch(spec)
     row = json.loads((spec.output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert row["limits"] == {"max_attempts": 3, "max_tool_calls": 80, "agent_timeout_seconds": 600, "command_timeout_seconds": 120}
+
+
+def test_batch_manifest_references_append_only_worker_attempt_directory(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+
+    case_path = _write_case_with_limits(tmp_path / "a", 40)
+    spec = BatchSpec(tmp_path, ["react"], [case_path], 1, tmp_path / "batch")
+    monkeypatch.setattr(
+        batch_module,
+        "build_experiment_fingerprint",
+        lambda spec: {"schema_version": 3, "identity": {}, "identity_fingerprint": "fingerprint", "provenance": {}},
+    )
+    captured: dict = {}
+
+    class FakeRunner:
+        def __init__(self, *, project_root, runs_root=None) -> None:
+            captured["runs_root"] = runs_root
+
+        def run_case(self, case_path, architecture="multi-agent", limits_override=None, **kwargs):
+            captured.update(kwargs)
+            from mokioclaw.evals.models import CaseResult, RunStatus
+
+            return CaseResult(
+                run_id="legacy-run",
+                scheduled_run_id=kwargs["scheduled_run_id"],
+                worker_attempt_id=kwargs["worker_attempt_id"],
+                case_id="demo-case",
+                status=RunStatus.FAILED,
+                success=False,
+                agent_attempt_count=4,
+            )
+
+    monkeypatch.setattr(batch_module, "EvalRunner", FakeRunner)
+
+    run_batch(spec)
+
+    row = json.loads((spec.output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["scheduled_run_id"] == captured["scheduled_run_id"]
+    assert row["worker_attempt_id"] == captured["worker_attempt_id"]
+    assert row["attempt_path"] == f"worker-attempts/{captured['worker_attempt_id']}"
+    assert (spec.output_dir / row["attempt_path"]).is_dir()
+    ledger_lines = (spec.output_dir / "worker-attempt-ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["event"] for line in ledger_lines] == ["launch", "terminal"]
+
+
+def test_batch_refuses_to_replace_a_launched_slot_missing_from_manifest(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+    from mokioclaw.evals.worker_ledger import WorkerAttemptLedger, scheduled_run_id
+
+    case_path = _write_case_with_limits(tmp_path / "a", 40)
+    spec = BatchSpec(tmp_path, ["react"], [case_path], 1, tmp_path / "batch")
+    fingerprint = {"schema_version": 3, "identity": {}, "identity_fingerprint": "fingerprint", "provenance": {}}
+    monkeypatch.setattr(batch_module, "build_experiment_fingerprint", lambda spec: fingerprint)
+    spec.output_dir.mkdir(parents=True)
+    (spec.output_dir / "experiment.json").write_text(json.dumps(fingerprint), encoding="utf-8")
+    schedule_hash = batch_module._batch_schedule_sha256(spec, ["demo-case"], 1)
+    slot = scheduled_run_id(
+        case_id="demo-case", architecture="react", cell="default", repeat=1, schedule_sha256=schedule_hash
+    )
+    WorkerAttemptLedger(spec.output_dir).launch(slot, worker_attempt_id="old-worker")
+
+    with pytest.raises(RuntimeError, match="already launched"):
+        run_batch(spec)
+    assert len(list((spec.output_dir / "worker-attempts").iterdir())) == 1
+
+
+def test_batch_hard_stop_marks_all_later_slots_not_started(tmp_path: Path, monkeypatch) -> None:
+    from mokioclaw.evals import batch as batch_module
+    from mokioclaw.evals.batch import BatchSpec, run_batch
+    from mokioclaw.evals.models import CaseResult, RunStatus
+    from mokioclaw.evals.provider_failures import FailureKind
+
+    case_path = _write_case_with_limits(tmp_path / "a", 40)
+    spec = BatchSpec(tmp_path, ["react", "plan-execute"], [case_path], 1, tmp_path / "batch")
+    monkeypatch.setattr(
+        batch_module,
+        "build_experiment_fingerprint",
+        lambda spec: {"schema_version": 3, "identity": {}, "identity_fingerprint": "fingerprint", "provenance": {}},
+    )
+    calls: list[str] = []
+
+    class FakeRunner:
+        def __init__(self, *, project_root) -> None:
+            pass
+
+        def run_case(self, case_path, architecture="multi-agent", **kwargs):
+            calls.append(architecture)
+            return CaseResult(
+                run_id="r1",
+                case_id="demo-case",
+                status=RunStatus.SETUP_FAILED,
+                success=False,
+                failure_kind=FailureKind.PROVIDER_AUTH,
+                provider_phase="pre_request",
+            )
+
+    monkeypatch.setattr(batch_module, "EvalRunner", FakeRunner)
+
+    summary = run_batch(spec)
+
+    assert calls == ["react"]
+    assert summary["stop_status"]["stopped"] is True
+    assert summary["stop_status"]["reason"] == "immediate_failure:provider_auth"
+    events = [json.loads(line) for line in (spec.output_dir / "worker-attempt-ledger.jsonl").read_text().splitlines()]
+    assert [event["event"] for event in events] == ["launch", "terminal", "not_started"]
+    assert events[-1]["reason"] == "immediate_failure:provider_auth"
+
+
+def test_snapshot_schedule_cli_writes_frozen_click_schedule(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from mokioclaw.evals.cli import app
+
+    output = tmp_path / "schedule.json"
+    result = CliRunner().invoke(
+        app,
+        ["snapshot-schedule", "--output", str(output), "--cases", "case-b,case-a", "--seed", "20260922"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["case_ids"] == ["case-a", "case-b"]
+    assert payload["run_budget"] == 72

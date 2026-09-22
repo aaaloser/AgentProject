@@ -14,9 +14,11 @@ from dotenv import load_dotenv
 
 from mokioclaw.evals.cases import load_case
 from mokioclaw.evals.models import CaseResult, Limits, LimitsOverride, RunStatus, effective_limits, resolved_case_image
+from mokioclaw.evals.protocol import StopController
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
 from mokioclaw.evals.sandbox import DockerCommandExecutor
+from mokioclaw.evals.worker_ledger import WorkerAttemptLedger, scheduled_run_id
 
 @dataclass(frozen=True)
 class BatchSpec:
@@ -26,6 +28,7 @@ class BatchSpec:
     repeat: int
     output_dir: Path
     limits_override: LimitsOverride | None = None
+    experiment_identity: dict[str, Any] | None = None
 
 
 def plan_execution_order(architectures: list[str], case_ids: list[str], repeat: int) -> list[tuple[str, str, int]]:
@@ -118,6 +121,14 @@ def _load_completed(manifest_path: Path) -> set[tuple[str, str, int]]:
     return completed
 
 
+def _batch_schedule_sha256(spec: BatchSpec, case_ids: list[str], repeat: int) -> str:
+    payload = {
+        "order": plan_execution_order(spec.architectures, case_ids, repeat),
+        "protocol": "legacy-batch-append-only-v1",
+    }
+    return _sha256_bytes(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+
+
 def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
     _validate_uniform_batch(spec)
     output = spec.output_dir
@@ -135,37 +146,80 @@ def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
 
     manifest_path = output / "manifest.jsonl"
     completed = _load_completed(manifest_path)
+    ledger = WorkerAttemptLedger(output)
     case_ids = [path.stem for path in spec.case_paths]
+    batch_repeat = repeat or spec.repeat
+    schedule_sha256 = _batch_schedule_sha256(spec, case_ids, batch_repeat)
     limits_by_case = {
         path.stem: asdict(effective_limits(load_case(path).limits, spec.limits_override)) for path in spec.case_paths
     }
     executed: list[dict[str, Any]] = []
-    total = len(plan_execution_order(spec.architectures, case_ids, repeat or spec.repeat))
-    for index, (architecture, case_id, current_repeat) in enumerate(
-        plan_execution_order(spec.architectures, case_ids, repeat or spec.repeat), start=1
-    ):
+    execution_order = plan_execution_order(spec.architectures, case_ids, batch_repeat)
+    total = len(execution_order)
+    stop_controller = StopController(case_count=len(case_ids)) if len(case_ids) in {1, 2} else None
+    stop_status: dict[str, Any] = {"stopped": False, "reason": None}
+    for index, (architecture, case_id, current_repeat) in enumerate(execution_order, start=1):
         if (architecture, case_id, current_repeat) in completed:
             continue
+        if spec.experiment_identity is not None:
+            from mokioclaw.evals.experiment_identity import (
+                build_experiment_fingerprint as build_identity_fingerprint,
+                verify_experiment_fingerprint,
+            )
+
+            verify_experiment_fingerprint(
+                output / "experiment-fingerprint.json",
+                build_identity_fingerprint(spec.experiment_identity),
+            )
         case_path = next(path for path in spec.case_paths if path.stem == case_id)
+        slot_id = scheduled_run_id(
+            case_id=case_id,
+            architecture=architecture,
+            cell="default",
+            repeat=current_repeat,
+            schedule_sha256=schedule_sha256,
+        )
+        attempt = ledger.launch(slot_id)
         print(f"[{index}/{total}] {architecture}/{case_id}/r{current_repeat} ...", flush=True)
         try:
-            result = EvalRunner(project_root=spec.project_root).run_case(case_path, architecture=architecture, limits_override=spec.limits_override)
+            result = EvalRunner(project_root=spec.project_root).run_case(
+                case_path,
+                architecture=architecture,
+                limits_override=spec.limits_override,
+                scheduled_run_id=slot_id,
+                worker_attempt_id=attempt.worker_attempt_id,
+                run_root=attempt.directory,
+            )
         except Exception as exc:  # failure isolation: record and continue
             result = CaseResult(
                 run_id=f"{case_id}-batch-error-{index}",
                 case_id=case_id,
                 status=RunStatus.SETUP_FAILED,
                 success=False,
+                scheduled_run_id=slot_id,
+                worker_attempt_id=attempt.worker_attempt_id,
                 failure_stage="setup",
-                failure_reason=f"{type(exc).__name__}: {exc}",
+                failure_reason=type(exc).__name__,
+                sanitized_reason=type(exc).__name__,
             )
-        report_dir = output / "runs" / architecture / f"{case_id}-r{current_repeat}"
+        result.scheduled_run_id = slot_id
+        result.worker_attempt_id = attempt.worker_attempt_id
+        report_dir = attempt.directory / "report"
         write_result(result, report_dir)
+        ledger.terminal(
+            slot_id,
+            attempt.worker_attempt_id,
+            status=result.status.value,
+            agent_attempt_count=result.agent_attempt_count or result.attempts,
+        )
         row = {
             "architecture": architecture,
             "case_id": case_id,
             "repeat": current_repeat,
             "run_id": result.run_id,
+            "scheduled_run_id": slot_id,
+            "worker_attempt_id": attempt.worker_attempt_id,
+            "attempt_path": attempt.directory.relative_to(output).as_posix(),
             "status": result.status.value,
             "success": result.success,
             "limits": limits_by_case[case_id],
@@ -175,6 +229,37 @@ def run_batch(spec: BatchSpec, *, repeat: int | None = None) -> dict[str, Any]:
         with manifest_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
             handle.flush()
+            os.fsync(handle.fileno())
         executed.append(row)
         print(f"[{index}/{total}] {architecture}/{case_id}/r{current_repeat} -> {row['status']}", flush=True)
-    return {"manifest": str(manifest_path), "executed": executed}
+        if stop_controller is not None:
+            failure_kind = result.failure_kind.value if result.failure_kind is not None else None
+            decision = stop_controller.observe(
+                round_name=f"R{current_repeat}",
+                failure_kind=failure_kind,
+                successful_model_response=result.model_call_count > 0,
+                token_usage_present=result.total_tokens is not None,
+                transport_observable=(
+                    failure_kind != "provider_transport" or result.transport_attempt_count > 0
+                ),
+            )
+            stop_status = {
+                "stopped": decision.stopped,
+                "reason": decision.reason,
+                "consecutive_transport": decision.consecutive_transport,
+                "round_transport": decision.round_transport,
+            }
+            if decision.stopped:
+                for pending_architecture, pending_case_id, pending_repeat in execution_order[index:]:
+                    if (pending_architecture, pending_case_id, pending_repeat) in completed:
+                        continue
+                    pending_slot = scheduled_run_id(
+                        case_id=pending_case_id,
+                        architecture=pending_architecture,
+                        cell="default",
+                        repeat=pending_repeat,
+                        schedule_sha256=schedule_sha256,
+                    )
+                    ledger.mark_not_started(pending_slot, reason=decision.reason or "batch_stopped")
+                break
+    return {"manifest": str(manifest_path), "executed": executed, "stop_status": stop_status}

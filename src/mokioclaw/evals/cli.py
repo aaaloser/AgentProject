@@ -9,6 +9,7 @@ from mokioclaw.evals.batch import BatchSpec, run_batch
 from mokioclaw.evals.models import LimitsOverride
 from mokioclaw.evals.report import write_result
 from mokioclaw.evals.runner import EvalRunner
+from mokioclaw.evals.snapshot_schedule import CLICK_SCHEDULE_SEED, write_snapshot_schedule
 
 
 app = typer.Typer(help="Run MokioClaw evaluation Cases")
@@ -61,3 +62,19 @@ def batch_command(
     except RuntimeError as exc:
         typer.echo(str(exc))
         raise typer.Exit(code=2)
+
+
+@app.command("snapshot-schedule")
+def snapshot_schedule_command(
+    output: Annotated[Path, typer.Option("--output")],
+    cases: Annotated[str, typer.Option("--cases")],
+    seed: Annotated[int, typer.Option("--seed")] = CLICK_SCHEDULE_SEED,
+) -> None:
+    """Freeze a deterministic one- or two-Case Click execution schedule."""
+    case_ids = [item.strip() for item in cases.split(",") if item.strip()]
+    try:
+        path = write_snapshot_schedule(output, seed=seed, case_ids=case_ids)
+    except (RuntimeError, ValueError) as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=2)
+    typer.echo(path)
