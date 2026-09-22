@@ -1,0 +1,45 @@
+diff --git a/src/click/testing.py b/src/click/testing.py
+--- a/src/click/testing.py
++++ b/src/click/testing.py
+@@ -240,7 +240,7 @@ class Result:
+         .. versionchanged:: 8.2
+             No longer a proxy for ``self.stdout``. Now has its own independent stream
+             that is mixing `<stdout>` and `<stderr>`, in the order they were written.
+         """
+-        return self.output_bytes.decode(self.runner.charset, "replace").replace(
++        return self.output_bytes.decode("utf-8", "replace").replace(
+             "\r\n", "\n"
+         )
+diff --git a/tests/test_public_repro_runner_charset.py b/tests/test_public_repro_runner_charset.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_public_repro_runner_charset.py
+@@ -0,0 +1,7 @@
++from repro_runner_charset import invoke_latin1_output
++
++
++def test_result_output_uses_runner_charset() -> None:
++    result = invoke_latin1_output()
++    assert result.exit_code == 0, result.output
++    assert result.output == "café\n"
+diff --git a/repro_runner_charset.py b/repro_runner_charset.py
+new file mode 100644
+--- /dev/null
++++ b/repro_runner_charset.py
+@@ -0,0 +1,16 @@
++import click
++from click.testing import CliRunner
++
++
++def invoke_latin1_output():
++    @click.command()
++    def cli() -> None:
++        click.echo("café")
++
++    return CliRunner(charset="latin-1").invoke(cli)
++
++
++if __name__ == "__main__":
++    result = invoke_latin1_output()
++    assert result.exit_code == 0, result.output
++    assert result.output == "café\n"

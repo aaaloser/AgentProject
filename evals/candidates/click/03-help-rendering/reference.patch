@@ -1,0 +1,12 @@
+diff --git a/src/click/formatting.py b/src/click/formatting.py
+--- a/src/click/formatting.py
++++ b/src/click/formatting.py
+@@ -202,7 +202,7 @@ class HelpFormatter:
+ 
+     def write_heading(self, heading: str) -> None:
+         """Writes a heading into the buffer."""
+-        self.write(f"{heading}:\n")
++        self.write(f"{'':>{self.current_indent}}{heading}:\n")
+ 
+     def write_paragraph(self) -> None:
+         """Writes a paragraph into the buffer."""

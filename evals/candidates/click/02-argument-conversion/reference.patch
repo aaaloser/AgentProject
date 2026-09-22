@@ -1,0 +1,11 @@
+diff --git a/src/click/types.py b/src/click/types.py
+--- a/src/click/types.py
++++ b/src/click/types.py
+@@ -363,6 +363,6 @@ class Choice(ParamType[_ValueT_co], t.Generic[_ValueT_co]):
+             normed_value = ctx.token_normalize_func(normed_value)
+ 
+         if not self.case_sensitive:
+-            normed_value = normed_value.lower()
++            normed_value = normed_value.casefold()
+ 
+         return normed_value

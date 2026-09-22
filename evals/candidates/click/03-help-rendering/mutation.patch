@@ -1,0 +1,40 @@
+diff --git a/src/click/formatting.py b/src/click/formatting.py
+--- a/src/click/formatting.py
++++ b/src/click/formatting.py
+@@ -202,7 +202,7 @@ class HelpFormatter:
+ 
+     def write_heading(self, heading: str) -> None:
+         """Writes a heading into the buffer."""
+-        self.write(f"{'':>{self.current_indent}}{heading}:\n")
++        self.write(f"{heading}:\n")
+ 
+     def write_paragraph(self) -> None:
+         """Writes a paragraph into the buffer."""
+diff --git a/tests/test_public_repro_indented_heading.py b/tests/test_public_repro_indented_heading.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_public_repro_indented_heading.py
+@@ -0,0 +1,5 @@
++from repro_indented_heading import render_indented_heading
++
++
++def test_help_heading_respects_current_indentation() -> None:
++    assert render_indented_heading() == "  Options:\n"
+diff --git a/repro_indented_heading.py b/repro_indented_heading.py
+new file mode 100644
+--- /dev/null
++++ b/repro_indented_heading.py
+@@ -0,0 +1,13 @@
++import click
++
++
++def render_indented_heading() -> str:
++    formatter = click.HelpFormatter(indent_increment=2)
++    formatter.indent()
++    formatter.write_heading("Options")
++    return formatter.getvalue()
++
++
++if __name__ == "__main__":
++    output = render_indented_heading()
++    assert output == "  Options:\n", output

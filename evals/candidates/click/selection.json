@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "decision": "two-case-72",
+  "selection_rule": "Select the first PASS candidate, then the first later PASS candidate from a different subsystem.",
+  "selected_candidate_ids": [
+    "click-double-percent-option-prefix-01",
+    "click-choice-unicode-casefold-02"
+  ],
+  "selected_subsystem_ids": [
+    "option-parsing",
+    "argument-conversion"
+  ],
+  "run_budget": 72,
+  "agent_results_seen": false,
+  "fixture_validation": true,
+  "agent_score": false
+}

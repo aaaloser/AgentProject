@@ -1,0 +1,10 @@
+diff --git a/src/click/parser.py b/src/click/parser.py
+--- a/src/click/parser.py
++++ b/src/click/parser.py
+@@ -110,6 +110,4 @@ def _split_opt(opt: str) -> tuple[str, str]:
+     first = opt[:1]
+-    if opt.startswith("%%"):
+-        return "", opt
+     if first.isalnum():
+         return "", opt
+     if opt[1:2] == first:

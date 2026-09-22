@@ -1,0 +1,32 @@
+id: click-choice-unicode-casefold-02
+category: bugfix
+task: 修复 Click 不区分大小写 Choice 在某些 Unicode 文本上无法匹配已声明选项的问题；保持大小写敏感模式和输出原始选项值的行为不变。
+image: mokioclaw-eval-click:8.4.2
+repository:
+  template: click
+  mutation: click-choice-unicode-casefold-02.patch
+public_verification:
+  commands:
+    - python -m pytest -q
+    - python repro_choice_casefold.py
+grader:
+  id: click.choice_unicode
+  hidden_tests: evals/graders/cases/click/choice_unicode
+  protected_paths:
+    - tests
+    - LICENSE.txt
+    - PROVENANCE.md
+    - pyproject.toml
+    - repro_choice_casefold.py
+    - conftest.py
+    - sitecustomize.py
+    - usercustomize.py
+    - tests_hidden
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 300
+policy:
+  network: provider_only
+  writable_paths: [.]

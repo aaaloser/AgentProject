@@ -1,0 +1,12 @@
+diff --git a/src/click/testing.py b/src/click/testing.py
+--- a/src/click/testing.py
++++ b/src/click/testing.py
+@@ -240,7 +240,7 @@ class Result:
+         .. versionchanged:: 8.2
+             No longer a proxy for ``self.stdout``. Now has its own independent stream
+             that is mixing `<stdout>` and `<stderr>`, in the order they were written.
+         """
+-        return self.output_bytes.decode("utf-8", "replace").replace(
++        return self.output_bytes.decode(self.runner.charset, "replace").replace(
+             "\r\n", "\n"
+         )

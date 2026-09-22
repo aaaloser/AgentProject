@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "order": 1,
+  "candidate_id": "click-double-percent-option-prefix-01",
+  "subsystem_id": "option-parsing",
+  "behavior": "A repeated custom percent prefix such as %%mode remains a valid long option and is parsed without being mistaken for an operand.",
+  "upstream_ownership": {
+    "source": "src/click/parser.py",
+    "tests": [
+      "tests/test_options.py",
+      "tests/test_parser.py"
+    ]
+  },
+  "expected_mutation_surface": [
+    "src/click/parser.py",
+    "tests/test_public_repro_double_percent_option.py",
+    "repro_double_percent_option.py"
+  ],
+  "acceptance_commands": {
+    "upstream_owned": "python -m pytest -q --ignore=tests/test_public_repro_double_percent_option.py",
+    "public_pytest": "python -m pytest -q",
+    "standalone_repro": "python repro_double_percent_option.py",
+    "hidden_behavior": "python -m pytest -q tests_hidden"
+  },
+  "status": "PASS"
+}

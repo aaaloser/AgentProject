@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "order": 3,
+  "candidate_id": "click-indented-help-heading-03",
+  "subsystem_id": "help-rendering",
+  "behavior": "HelpFormatter headings retain the formatter's current indentation at one and multiple nesting levels.",
+  "upstream_ownership": {
+    "source": "src/click/formatting.py",
+    "tests": [
+      "tests/test_formatting.py",
+      "tests/test_custom_classes.py"
+    ]
+  },
+  "expected_mutation_surface": [
+    "src/click/formatting.py",
+    "tests/test_public_repro_indented_heading.py",
+    "repro_indented_heading.py"
+  ],
+  "acceptance_commands": {
+    "upstream_owned": "python -m pytest -q --ignore=tests/test_public_repro_indented_heading.py",
+    "public_pytest": "python -m pytest -q",
+    "standalone_repro": "python repro_indented_heading.py",
+    "hidden_behavior": "python -m pytest -q tests_hidden"
+  },
+  "status": "PASS"
+}

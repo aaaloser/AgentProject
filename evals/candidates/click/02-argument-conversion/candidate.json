@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "order": 2,
+  "candidate_id": "click-choice-unicode-casefold-02",
+  "subsystem_id": "argument-conversion",
+  "behavior": "Case-insensitive Choice conversion uses Unicode case folding, so STRASSE resolves to the original Straße choice.",
+  "upstream_ownership": {
+    "source": "src/click/types.py",
+    "tests": [
+      "tests/test_basic.py",
+      "tests/test_options.py",
+      "tests/test_types.py"
+    ]
+  },
+  "expected_mutation_surface": [
+    "src/click/types.py",
+    "tests/test_public_repro_choice_casefold.py",
+    "repro_choice_casefold.py"
+  ],
+  "acceptance_commands": {
+    "upstream_owned": "python -m pytest -q --ignore=tests/test_public_repro_choice_casefold.py",
+    "public_pytest": "python -m pytest -q",
+    "standalone_repro": "python repro_choice_casefold.py",
+    "hidden_behavior": "python -m pytest -q tests_hidden"
+  },
+  "status": "PASS"
+}

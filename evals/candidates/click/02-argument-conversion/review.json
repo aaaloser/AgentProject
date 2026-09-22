@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "candidate_id": "click-choice-unicode-casefold-02",
+  "subsystem_id": "argument-conversion",
+  "status": "PASS",
+  "reason": "The preregistered bug/fix, public, standalone, hidden, broken-edit, and timing matrix passed without changing the frozen subsystem.",
+  "fixture_validation": true,
+  "agent_score": false,
+  "matrix_test_elapsed_seconds": 74.31,
+  "localization_steps": [
+    "Reproduce the Unicode Choice mismatch through the public command.",
+    "Confirm the declared choice value is preserved in the parameter.",
+    "Trace argument conversion into Choice.convert.",
+    "Inspect Choice.normalize_choice normalization for both input and choices.",
+    "Compare lowercasing with Unicode caseless matching behavior.",
+    "Verify the correction is confined to src/click/types.py."
+  ],
+  "criteria": {
+    "upstream_bug_green": true,
+    "upstream_fix_green": true,
+    "public_bug_red_fix_green": true,
+    "repro_bug_red_fix_green": true,
+    "hidden_bug_red_fix_green": true,
+    "task_non_leaking": true,
+    "localization_within_ten_steps": true,
+    "reference_patch_within_forty_lines": true,
+    "broken_edit_turns_both_public_paths_red": true,
+    "three_runs_within_ninety_seconds": true
+  }
+}

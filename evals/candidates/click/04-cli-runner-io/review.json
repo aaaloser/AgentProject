@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "candidate_id": "click-runner-charset-output-04",
+  "subsystem_id": "cli-runner-io",
+  "status": "PASS",
+  "reason": "The preregistered bug/fix, public, standalone, hidden, broken-edit, and timing matrix passed without changing the frozen subsystem.",
+  "fixture_validation": true,
+  "agent_score": false,
+  "matrix_test_elapsed_seconds": 73.04,
+  "localization_steps": [
+    "Reproduce corrupted non-default-charset output through the public command.",
+    "Confirm the runner stores the requested charset.",
+    "Trace invocation streams into Result.output_bytes.",
+    "Inspect Result.output decoding.",
+    "Compare decoding with Result.stdout and Result.stderr behavior.",
+    "Verify the correction is confined to src/click/testing.py."
+  ],
+  "criteria": {
+    "upstream_bug_green": true,
+    "upstream_fix_green": true,
+    "public_bug_red_fix_green": true,
+    "repro_bug_red_fix_green": true,
+    "hidden_bug_red_fix_green": true,
+    "task_non_leaking": true,
+    "localization_within_ten_steps": true,
+    "reference_patch_within_forty_lines": true,
+    "broken_edit_turns_both_public_paths_red": true,
+    "three_runs_within_ninety_seconds": true
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "candidate_id": "click-indented-help-heading-03",
+  "subsystem_id": "help-rendering",
+  "status": "PASS",
+  "reason": "The preregistered bug/fix, public, standalone, hidden, broken-edit, and timing matrix passed without changing the frozen subsystem.",
+  "fixture_validation": true,
+  "agent_score": false,
+  "matrix_test_elapsed_seconds": 74.13,
+  "localization_steps": [
+    "Reproduce the missing heading indentation through the public command.",
+    "Confirm the formatter indentation state is nonzero.",
+    "Trace heading emission into HelpFormatter.write_heading.",
+    "Compare heading output with paragraph and definition-list indentation.",
+    "Verify the correction is confined to src/click/formatting.py."
+  ],
+  "criteria": {
+    "upstream_bug_green": true,
+    "upstream_fix_green": true,
+    "public_bug_red_fix_green": true,
+    "repro_bug_red_fix_green": true,
+    "hidden_bug_red_fix_green": true,
+    "task_non_leaking": true,
+    "localization_within_ten_steps": true,
+    "reference_patch_within_forty_lines": true,
+    "broken_edit_turns_both_public_paths_red": true,
+    "three_runs_within_ninety_seconds": true
+  }
+}

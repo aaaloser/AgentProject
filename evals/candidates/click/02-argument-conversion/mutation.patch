@@ -1,0 +1,45 @@
+diff --git a/src/click/types.py b/src/click/types.py
+--- a/src/click/types.py
++++ b/src/click/types.py
+@@ -363,6 +363,6 @@ class Choice(ParamType[_ValueT_co], t.Generic[_ValueT_co]):
+             normed_value = ctx.token_normalize_func(normed_value)
+ 
+         if not self.case_sensitive:
+-            normed_value = normed_value.casefold()
++            normed_value = normed_value.lower()
+ 
+         return normed_value
+diff --git a/tests/test_public_repro_choice_casefold.py b/tests/test_public_repro_choice_casefold.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_public_repro_choice_casefold.py
+@@ -0,0 +1,7 @@
++from repro_choice_casefold import invoke_unicode_choice
++
++
++def test_case_insensitive_choice_uses_unicode_case_folding() -> None:
++    result = invoke_unicode_choice("STRASSE")
++    assert result.exit_code == 0, result.output
++    assert result.output == "Straße\n"
+diff --git a/repro_choice_casefold.py b/repro_choice_casefold.py
+new file mode 100644
+--- /dev/null
++++ b/repro_choice_casefold.py
+@@ -0,0 +1,17 @@
++import click
++from click.testing import CliRunner
++
++
++def invoke_unicode_choice(value: str):
++    @click.command()
++    @click.argument("street", type=click.Choice(["Straße"], case_sensitive=False))
++    def cli(street: str) -> None:
++        click.echo(street)
++
++    return CliRunner().invoke(cli, [value])
++
++
++if __name__ == "__main__":
++    result = invoke_unicode_choice("STRASSE")
++    assert result.exit_code == 0, result.output
++    assert result.output == "Straße\n"

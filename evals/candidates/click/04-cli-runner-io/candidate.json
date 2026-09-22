@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "order": 4,
+  "candidate_id": "click-runner-charset-output-04",
+  "subsystem_id": "cli-runner-io",
+  "behavior": "CliRunner Result.output decodes the mixed output stream using the runner's configured charset.",
+  "upstream_ownership": {
+    "source": "src/click/testing.py",
+    "tests": [
+      "tests/test_testing.py"
+    ]
+  },
+  "expected_mutation_surface": [
+    "src/click/testing.py",
+    "tests/test_public_repro_runner_charset.py",
+    "repro_runner_charset.py"
+  ],
+  "acceptance_commands": {
+    "upstream_owned": "python -m pytest -q --ignore=tests/test_public_repro_runner_charset.py",
+    "public_pytest": "python -m pytest -q",
+    "standalone_repro": "python repro_runner_charset.py",
+    "hidden_behavior": "python -m pytest -q tests_hidden"
+  },
+  "status": "PASS"
+}

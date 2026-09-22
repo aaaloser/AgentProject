@@ -1,0 +1,32 @@
+id: click-double-percent-option-prefix-01
+category: bugfix
+task: 修复 Click 对重复百分号前缀长选项的解析，使这类选项能按声明正常识别；保持标准短选项、标准长选项及参数解析行为不变。
+image: mokioclaw-eval-click:8.4.2
+repository:
+  template: click
+  mutation: click-double-percent-option-prefix-01.patch
+public_verification:
+  commands:
+    - python -m pytest -q
+    - python repro_double_percent_option.py
+grader:
+  id: click.double_percent_option
+  hidden_tests: evals/graders/cases/click/double_percent_option
+  protected_paths:
+    - tests
+    - LICENSE.txt
+    - PROVENANCE.md
+    - pyproject.toml
+    - repro_double_percent_option.py
+    - conftest.py
+    - sitecustomize.py
+    - usercustomize.py
+    - tests_hidden
+limits:
+  max_attempts: 3
+  max_tool_calls: 40
+  agent_timeout_seconds: 600
+  command_timeout_seconds: 300
+policy:
+  network: provider_only
+  writable_paths: [.]

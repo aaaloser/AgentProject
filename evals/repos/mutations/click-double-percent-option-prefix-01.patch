@@ -1,0 +1,44 @@
+diff --git a/src/click/parser.py b/src/click/parser.py
+--- a/src/click/parser.py
++++ b/src/click/parser.py
+@@ -110,4 +110,6 @@ def _split_opt(opt: str) -> tuple[str, str]:
+     first = opt[:1]
++    if opt.startswith("%%"):
++        return "", opt
+     if first.isalnum():
+         return "", opt
+     if opt[1:2] == first:
+diff --git a/tests/test_public_repro_double_percent_option.py b/tests/test_public_repro_double_percent_option.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_public_repro_double_percent_option.py
+@@ -0,0 +1,7 @@
++from repro_double_percent_option import invoke_double_percent_option
++
++
++def test_repeated_custom_prefix_is_parsed_as_a_long_option() -> None:
++    result = invoke_double_percent_option()
++    assert result.exit_code == 0, result.output
++    assert result.output == "mode=True\n"
+diff --git a/repro_double_percent_option.py b/repro_double_percent_option.py
+new file mode 100644
+--- /dev/null
++++ b/repro_double_percent_option.py
+@@ -0,0 +1,17 @@
++import click
++from click.testing import CliRunner
++
++
++def invoke_double_percent_option():
++    @click.command()
++    @click.option("%%mode", is_flag=True)
++    def cli(mode: bool) -> None:
++        click.echo(f"mode={mode}")
++
++    return CliRunner().invoke(cli, ["%%mode"])
++
++
++if __name__ == "__main__":
++    result = invoke_double_percent_option()
++    assert result.exit_code == 0, result.output
++    assert result.output == "mode=True\n"
