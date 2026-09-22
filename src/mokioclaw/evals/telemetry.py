@@ -2,10 +2,26 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 CHECKPOINT_NAME = "run-checkpoint.json"
+
+
+@dataclass(frozen=True)
+class TelemetrySummary:
+    coverage: str
+    unavailable_reason: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    model_call_count: int
+    completed_call_count: int
+    error_call_count: int
+    in_flight_call_count: int
+    transport_attempt_count: int
+    incomplete_temporary_file_count: int = 0
 
 
 def checkpoint_path_for(config_workspace: Path) -> Path:

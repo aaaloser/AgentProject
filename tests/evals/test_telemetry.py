@@ -4,6 +4,8 @@ from pathlib import Path
 from mokioclaw.evals.adapters import RunArtifacts, consume_adapter_events
 from mokioclaw.evals.models import AgentRunConfig
 from mokioclaw.evals.telemetry import CHECKPOINT_NAME, load_checkpoint, write_checkpoint
+from mokioclaw.evals.provider_failures import classify_failure
+from mokioclaw.providers.call_journal import CallJournal
 
 
 def test_write_checkpoint_is_atomic_and_load_round_trips(tmp_path: Path) -> None:
@@ -259,3 +261,89 @@ def test_checkpoint_overhead_is_recorded_and_bounded(tmp_path: Path) -> None:
         f"checkpoint overhead too high: {per_event_ms:.3f} ms/event "
         f"(without={without_seconds:.3f}s, with={with_seconds:.3f}s)"
     )
+
+
+def test_call_journal_full_coverage_requires_usage_for_every_success(tmp_path: Path) -> None:
+    journal = CallJournal(tmp_path)
+    call_index = journal.begin_model_call()
+    journal.complete_model_call(call_index, {"input_tokens": 3, "output_tokens": 2}, "callback")
+
+    summary = journal.summarize()
+
+    assert summary.coverage == "full"
+    assert summary.unavailable_reason is None
+    assert summary.input_tokens == 3
+    assert summary.output_tokens == 2
+    assert summary.total_tokens == 5
+
+
+def test_call_journal_partial_coverage_preserves_completed_usage_during_in_flight_call(tmp_path: Path) -> None:
+    journal = CallJournal(tmp_path)
+    first = journal.begin_model_call()
+    journal.complete_model_call(first, {"input_tokens": 3, "output_tokens": 2}, "callback")
+    journal.begin_model_call()
+
+    summary = journal.summarize()
+
+    assert summary.coverage == "partial"
+    assert summary.unavailable_reason == "worker_killed_during_call"
+    assert summary.input_tokens == 3
+    assert summary.output_tokens == 2
+    assert summary.total_tokens == 5
+
+
+def test_call_journal_unavailable_before_any_model_call_is_worker_killed_before_response(tmp_path: Path) -> None:
+    summary = CallJournal(tmp_path).summarize()
+
+    assert summary.coverage == "unavailable"
+    assert summary.unavailable_reason == "worker_killed_before_first_model_response"
+    assert summary.input_tokens is None
+    assert summary.output_tokens is None
+    assert summary.total_tokens is None
+
+
+def test_call_journal_unavailable_provider_error_before_usage(tmp_path: Path) -> None:
+    journal = CallJournal(tmp_path)
+    call_index = journal.begin_model_call()
+    journal.fail_model_call(
+        call_index,
+        classify_failure(
+            TimeoutError("provider failed"),
+            at_provider_boundary=True,
+            successful_model_responses=0,
+            tool_activity_count=0,
+        ),
+    )
+
+    summary = journal.summarize()
+
+    assert summary.coverage == "unavailable"
+    assert summary.unavailable_reason == "provider_error_before_usage"
+    assert summary.input_tokens is None
+    assert summary.output_tokens is None
+
+
+def test_call_journal_unavailable_provider_usage_missing(tmp_path: Path) -> None:
+    journal = CallJournal(tmp_path)
+    call_index = journal.begin_model_call()
+    journal.complete_model_call(call_index, None, "provider_response_metadata")
+
+    summary = journal.summarize()
+
+    assert summary.coverage == "unavailable"
+    assert summary.unavailable_reason == "provider_usage_missing"
+    assert summary.input_tokens is None
+    assert summary.output_tokens is None
+
+
+def test_call_journal_unavailable_usage_parse_error(tmp_path: Path) -> None:
+    journal = CallJournal(tmp_path)
+    call_index = journal.begin_model_call()
+    journal.complete_model_call(call_index, {"input_tokens": "not-an-int", "output_tokens": 2}, "callback")
+
+    summary = journal.summarize()
+
+    assert summary.coverage == "unavailable"
+    assert summary.unavailable_reason == "usage_parse_error"
+    assert summary.input_tokens is None
+    assert summary.output_tokens is None
