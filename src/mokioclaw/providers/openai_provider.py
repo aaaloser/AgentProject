@@ -1,11 +1,30 @@
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
 from mokioclaw.providers.usage import current_usage_handler
+
+
+ADAPTER_CONFIG_VERSION = 1
+MAX_RETRIES = 0
+
+
+def provider_runtime_identity() -> dict[str, object]:
+    try:
+        sdk_version = version("langchain-openai")
+    except PackageNotFoundError:
+        sdk_version = "unavailable"
+    return {
+        "adapter_config_version": ADAPTER_CONFIG_VERSION,
+        "max_retries": MAX_RETRIES,
+        "sdk_package": "langchain-openai",
+        "sdk_version": sdk_version,
+        "transport_attempt_observable": True,
+    }
 
 
 def create_model() -> ChatOpenAI:
@@ -24,5 +43,6 @@ def create_model() -> ChatOpenAI:
         model=model,
         base_url=base_url,
         temperature=0,
+        max_retries=MAX_RETRIES,
         callbacks=[current_usage_handler()],
     )

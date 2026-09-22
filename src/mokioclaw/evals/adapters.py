@@ -10,7 +10,8 @@ from typing import Any, Protocol, Sequence
 from mokioclaw.core.agent import stream_agent_events
 from mokioclaw.evals.models import AgentRunConfig
 from mokioclaw.evals.telemetry import checkpoint_path_for, write_checkpoint
-from mokioclaw.providers.usage import start_usage_collection, sum_usage
+from mokioclaw.providers.call_journal import CallJournal
+from mokioclaw.providers.usage import bind_call_journal, record_provider_tool_activity, start_usage_collection, sum_usage
 
 
 @dataclass
@@ -26,6 +27,11 @@ class RunArtifacts:
     verification_command_runs: int = 0
     trace_path: str = ""
     last_stage: str = ""
+    total_tokens: int | None = None
+    telemetry_coverage: str = "unavailable"
+    telemetry_unavailable_reason: str | None = None
+    model_call_count: int = 0
+    transport_attempt_count: int = 0
 
 
 class AgentAdapter(Protocol):
@@ -45,6 +51,8 @@ class MokioAgentAdapter:
 
     def run(self, config: AgentRunConfig) -> RunArtifacts:
         records = start_usage_collection()
+        journal = CallJournal(config.workspace.parent)
+        bind_call_journal(journal, provider_host=config.base_url_host)
         artifacts = RunArtifacts()
         events = stream_agent_events(
             _task_with_protected_path_policy(config),
@@ -65,11 +73,7 @@ class MokioAgentAdapter:
                 checkpoint_path=checkpoint_path_for(config.workspace),
             )
         finally:
-            usage = sum_usage(records)
-            if artifacts.input_tokens is None:
-                artifacts.input_tokens = usage["input_tokens"]
-            if artifacts.output_tokens is None:
-                artifacts.output_tokens = usage["output_tokens"]
+            apply_usage_summary(artifacts, journal, records)
         return artifacts
 
     @staticmethod
@@ -85,6 +89,7 @@ class MokioAgentAdapter:
             if payload_type == "verification_command":
                 artifacts.verification_command_runs += 1
             elif payload_type == "tool_call":
+                record_provider_tool_activity()
                 artifacts.tool_calls += 1
                 command = str((payload.get("args") or {}).get("command", ""))
                 if any(cmd and cmd in command for cmd in verification_commands):
@@ -110,6 +115,26 @@ class MokioAgentAdapter:
 
 
 _record_event = MokioAgentAdapter._record_event
+
+
+def apply_usage_summary(artifacts: RunArtifacts, journal: CallJournal, legacy_records: list[dict[str, int]]) -> None:
+    summary = journal.summarize()
+    artifacts.telemetry_coverage = summary.coverage
+    artifacts.telemetry_unavailable_reason = summary.unavailable_reason
+    artifacts.model_call_count = summary.model_call_count
+    artifacts.transport_attempt_count = summary.transport_attempt_count
+    if summary.model_call_count:
+        artifacts.input_tokens = summary.input_tokens
+        artifacts.output_tokens = summary.output_tokens
+        artifacts.total_tokens = summary.total_tokens
+        return
+    usage = sum_usage(legacy_records)
+    if artifacts.input_tokens is None:
+        artifacts.input_tokens = usage["input_tokens"]
+    if artifacts.output_tokens is None:
+        artifacts.output_tokens = usage["output_tokens"]
+    if artifacts.input_tokens is not None and artifacts.output_tokens is not None:
+        artifacts.total_tokens = artifacts.input_tokens + artifacts.output_tokens
 
 
 def consume_adapter_events(

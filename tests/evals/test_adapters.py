@@ -1,11 +1,16 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from langchain_core.messages import AIMessage
 
 from mokioclaw.evals.adapters import MokioAgentAdapter, RunArtifacts
 from mokioclaw.evals.models import AgentRunConfig
+from mokioclaw.evals.plan_execute_adapter import PlanExecuteAdapter
+from mokioclaw.evals.react_adapter import ReactAdapter
 from mokioclaw.evals.worker import _write_artifacts
+from mokioclaw.providers.usage import current_usage_handler
 
 
 def make_run_config(tmp_path: Path) -> AgentRunConfig:
@@ -118,3 +123,59 @@ def test_run_artifacts_no_longer_has_first_pass_success() -> None:
     assert "first_pass_success" not in RunArtifacts.__dataclass_fields__
     assert "handoff_count" in RunArtifacts.__dataclass_fields__
     assert "verification_command_runs" in RunArtifacts.__dataclass_fields__
+
+
+class FakeUsageResponse:
+    llm_output = {"token_usage": {"prompt_tokens": 9, "completion_tokens": 3}}
+
+
+@pytest.mark.parametrize(
+    ("adapter_name", "adapter_type", "stream_target", "builder_target"),
+    [
+        ("multi-agent", MokioAgentAdapter, "mokioclaw.evals.adapters.stream_agent_events", None),
+        (
+            "plan-execute",
+            PlanExecuteAdapter,
+            "mokioclaw.evals.plan_execute_adapter.stream_eval_workflow_events",
+            "mokioclaw.evals.plan_execute_adapter.build_plan_execute_workflow",
+        ),
+        (
+            "react",
+            ReactAdapter,
+            "mokioclaw.evals.react_adapter.stream_eval_workflow_events",
+            "mokioclaw.evals.react_adapter.build_react_workflow",
+        ),
+    ],
+)
+def test_eval_adapters_bind_worker_call_journal_as_authoritative_usage(
+    monkeypatch,
+    tmp_path: Path,
+    adapter_name: str,
+    adapter_type,
+    stream_target: str,
+    builder_target: str | None,
+) -> None:
+    handler = current_usage_handler()
+
+    def fake_stream(*args, **kwargs):
+        handler.on_llm_start({}, ["FAKE_PROMPT"], run_id=f"{adapter_name}-call")
+        handler.on_llm_end(FakeUsageResponse(), run_id=f"{adapter_name}-call")
+        yield {"type": "custom_event", "event": {"type": "trace_summary", "input_tokens": 999, "output_tokens": 999}}
+
+    monkeypatch.setattr(stream_target, fake_stream)
+    if builder_target is not None:
+        monkeypatch.setattr(builder_target, lambda: object())
+    workspace = tmp_path / adapter_name / "agent"
+    workspace.mkdir(parents=True)
+    config = make_run_config(workspace)
+    config = AgentRunConfig(**{**config.__dict__, "architecture": adapter_name})
+
+    artifacts = adapter_type(command_executor=None).run(config)
+
+    assert artifacts.input_tokens == 9
+    assert artifacts.output_tokens == 3
+    assert artifacts.telemetry_coverage == "full"
+    assert artifacts.model_call_count == 1
+    assert artifacts.transport_attempt_count == 1
+    call_file = workspace.parent / "usage-calls" / "000001.json"
+    assert json.loads(call_file.read_text(encoding="utf-8"))["status"] == "completed"
