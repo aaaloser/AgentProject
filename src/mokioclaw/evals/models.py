@@ -5,6 +5,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence
 
+from mokioclaw.evals.provider_failures import FailureKind
+
 
 EVAL_IMAGE = "mokioclaw-eval-python:3.13"
 
@@ -100,6 +102,8 @@ class AgentRunConfig:
     max_attempts: int
     max_tool_calls: int
     timeout_seconds: int
+    scheduled_run_id: str = ""
+    worker_attempt_id: str = ""
     protected_paths: Sequence[str] = ()
     verification_commands: Sequence[str] = ()
 
@@ -117,6 +121,9 @@ class CaseResult:
     case_id: str
     status: RunStatus
     success: bool
+    scheduled_run_id: str = ""
+    worker_attempt_id: str = ""
+    agent_attempt_count: int = 0
     first_pass_success: bool = False
     grader_checks: list[GraderCheck] = field(default_factory=list)
     attempts: int = 0
@@ -125,10 +132,20 @@ class CaseResult:
     latency_ms: int = 0
     input_tokens: int | None = None
     output_tokens: int | None = None
+    total_tokens: int | None = None
     estimated_cost: float | None = None
     compression_count: int = 0
     failure_stage: str = ""
     failure_reason: str = ""
+    failure_kind: FailureKind | None = None
+    provider_status: int | None = None
+    provider_phase: str | None = None
+    retryable: bool = False
+    sanitized_reason: str = ""
+    telemetry_coverage: str = "unavailable"
+    telemetry_unavailable_reason: str | None = None
+    model_call_count: int = 0
+    transport_attempt_count: int = 0
     failure_detail_stage: str = ""
     needs_review: bool = False
     artifacts: dict[str, str] = field(default_factory=dict)
