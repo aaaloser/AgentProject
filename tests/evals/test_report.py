@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from mokioclaw.evals.models import CaseResult, GraderCheck, RunStatus
+from mokioclaw.evals.provider_failures import FailureKind
 from mokioclaw.evals.report import _markdown_report, write_result
 
 
@@ -48,3 +49,34 @@ def test_report_shows_new_metric_lines() -> None:
     assert "Verification command runs: 1" in markdown
     assert "Token coverage: unavailable" in markdown
     assert "Trace: trace-dir" in markdown
+
+
+def test_report_uses_structured_sanitized_failure_and_five_layer_identity(tmp_path: Path) -> None:
+    result = CaseResult(
+        run_id="legacy-run",
+        scheduled_run_id="scheduled-1",
+        worker_attempt_id="worker-1",
+        case_id="case",
+        status=RunStatus.SETUP_FAILED,
+        success=False,
+        agent_attempt_count=2,
+        attempts=2,
+        failure_kind=FailureKind.PROVIDER_TRANSPORT,
+        provider_status=504,
+        provider_phase="after_tool_activity",
+        sanitized_reason="Provider504; http_status=504; provider_host=provider.invalid",
+        failure_reason="Provider504; http_status=504; provider_host=provider.invalid",
+        telemetry_coverage="partial",
+        telemetry_unavailable_reason="provider_error_before_usage",
+    )
+
+    paths = write_result(result, tmp_path)
+    machine = paths["results"].read_text(encoding="utf-8")
+    markdown = paths["report"].read_text(encoding="utf-8")
+
+    assert "scheduled-1" in machine and "worker-1" in machine
+    assert "provider_transport" in markdown
+    assert "after_tool_activity" in markdown
+    assert "provider.invalid" in markdown
+    assert "Authorization" not in machine + markdown
+    assert "https://" not in machine + markdown
