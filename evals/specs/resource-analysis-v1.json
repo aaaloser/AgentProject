@@ -1,0 +1,218 @@
+{
+  "branches": {
+    "single_case": {
+      "formal_labels": false,
+      "scheduled_n": 3
+    },
+    "two_case": {
+      "formal_labels": true,
+      "scheduled_n": 6
+    }
+  },
+  "canonical_output": {
+    "absolute_paths": false,
+    "encoding": "utf-8",
+    "json_keys": "sorted",
+    "line_ending": "lf",
+    "list_order": "spec_defined",
+    "unstable_metadata_file": "analysis-audit.json"
+  },
+  "cells": {
+    "A": {
+      "max_tool_calls": 40,
+      "wall_time_seconds": 600
+    },
+    "B": {
+      "max_tool_calls": 80,
+      "wall_time_seconds": 600
+    },
+    "J": {
+      "max_tool_calls": 80,
+      "wall_time_seconds": 900
+    },
+    "T": {
+      "max_tool_calls": 40,
+      "wall_time_seconds": 900
+    }
+  },
+  "counters": [
+    "n",
+    "ts",
+    "bud",
+    "tout",
+    "res",
+    "tool_ge_45",
+    "deep",
+    "nonres",
+    "provider_attrition"
+  ],
+  "deep_progress": {
+    "multi-agent": {
+      "agent_attempt_count_at_least": 2,
+      "last_stage_in": [
+        "context_compressor",
+        "context_monitor",
+        "final",
+        "verifier"
+      ]
+    },
+    "plan-execute": {
+      "agent_attempt_count_at_least": 2,
+      "last_stage_in": [
+        "verify"
+      ]
+    },
+    "react": null
+  },
+  "non_resource_family": [
+    "hidden_contract_miss_after_validation",
+    "patch_generation_failure",
+    "protected_file_violation",
+    "public_regression_failed"
+  ],
+  "provider_sensitivity": {
+    "completion_statuses": [
+      "budget_exhausted",
+      "non_resource_failed",
+      "other_failed",
+      "passed",
+      "timed_out"
+    ],
+    "deep_values": [
+      0,
+      1
+    ],
+    "enumeration_scope": "per_architecture",
+    "max_attrition_range": 1,
+    "minimum_clean_per_cell": 5,
+    "minimum_gate_failure_label": "provider-attrition / inconclusive",
+    "qualification_scope": "per_architecture",
+    "react_enters_q1_q2": false,
+    "scheduled_n": 6,
+    "sensitive_label": "provider-sensitive / inconclusive",
+    "tool_ge_45_values_by_cell": {
+      "A": [
+        0
+      ],
+      "B": [
+        0,
+        1
+      ],
+      "J": [
+        0,
+        1
+      ],
+      "T": [
+        0
+      ]
+    }
+  },
+  "q1": {
+    "budget_priority_requires": [
+      "relief_b",
+      "relief_t",
+      "budget_b_eq_0",
+      "budget_t_gte_1"
+    ],
+    "inconclusive_label": "no axis-order signal / inconclusive",
+    "mapping": [
+      {
+        "label": "budget-axis directional signal",
+        "relief_b": true,
+        "relief_j": null,
+        "relief_t": false
+      },
+      {
+        "label": "timeout-axis directional signal",
+        "relief_b": false,
+        "relief_j": null,
+        "relief_t": true
+      },
+      {
+        "label": "both axes independently influential",
+        "relief_b": true,
+        "relief_j": null,
+        "relief_t": true
+      },
+      {
+        "label": "joint constraint / interaction",
+        "relief_b": false,
+        "relief_j": true,
+        "relief_t": false
+      }
+    ]
+  },
+  "q2": {
+    "booleans": [
+      "time_wall_shift",
+      "dual_axis_conversion",
+      "time_still_binding"
+    ],
+    "precedence": [
+      "dual-axis conversion",
+      "time still binding",
+      "no time-wall migration signal / inconclusive"
+    ]
+  },
+  "schema_version": 1,
+  "single_case_output": {
+    "allowed": [
+      "descriptive_resource_migration",
+      "provider_attrition",
+      "raw_deltas",
+      "raw_terminal_counts",
+      "react_canary",
+      "telemetry_coverage"
+    ],
+    "comparison_qualification": "single-case evidence / repository-level corroboration inconclusive",
+    "forbidden": [
+      "E",
+      "N",
+      "P",
+      "Q1",
+      "Q2",
+      "Relief",
+      "S",
+      "state"
+    ]
+  },
+  "state_precedence": [
+    {
+      "label": "resource-relief-success",
+      "requires": [
+        "S",
+        "Relief"
+      ]
+    },
+    {
+      "label": "resource-relief-no-success",
+      "requires": [
+        "not_S",
+        "Relief"
+      ]
+    },
+    {
+      "label": "resource-still-binding",
+      "requires": [
+        "not_S",
+        "not_Relief",
+        "res_gte_3"
+      ]
+    },
+    {
+      "label": "no-resource-signal / inconclusive",
+      "requires": [
+        "otherwise"
+      ]
+    }
+  ],
+  "thresholds": {
+    "deep_delta": 2,
+    "non_resource_delta": 2,
+    "resource_drop": 2,
+    "resource_still_binding_min": 3,
+    "success_delta": 2,
+    "tool_call_threshold": 45,
+    "tool_ge_threshold_runs": 2
+  }
+}
