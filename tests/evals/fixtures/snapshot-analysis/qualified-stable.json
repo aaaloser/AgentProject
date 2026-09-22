@@ -1,0 +1,8 @@
+{
+  "cells": {
+    "A": {"n": 6, "ts": 0, "bud": 5, "tout": 0, "res": 5, "tool_ge_45": 0, "deep": 0, "nonres": 0, "provider_attrition": 1},
+    "B": {"n": 6, "ts": 4, "bud": 0, "tout": 0, "res": 0, "tool_ge_45": 4, "deep": 4, "nonres": 0, "provider_attrition": 0},
+    "T": {"n": 6, "ts": 4, "bud": 1, "tout": 0, "res": 1, "tool_ge_45": 0, "deep": 4, "nonres": 0, "provider_attrition": 0},
+    "J": {"n": 6, "ts": 5, "bud": 0, "tout": 0, "res": 0, "tool_ge_45": 3, "deep": 4, "nonres": 0, "provider_attrition": 0}
+  }
+}

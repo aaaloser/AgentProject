@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
+from datetime import datetime, timezone
+from itertools import product
 from pathlib import Path
 from typing import Any, Iterable
 
+from mokioclaw.evals.analysis_spec import load_analysis_spec
 from mokioclaw.evals.attribution import derive_failure_detail
 
 
@@ -25,11 +29,12 @@ NON_RESOURCE_DETAILS = frozenset(
 )
 MULTI_AGENT_DEEP = frozenset({"context_monitor", "context_compressor", "verifier", "final"})
 KNOWN_STAGES = MULTI_AGENT_DEEP | {"planner", "verify", "execute", "react", ""}
+DEFAULT_ANALYSIS_SPEC_PATH = Path(__file__).resolve().parents[3] / "evals" / "specs" / "resource-analysis-v1.json"
 FORMULAS = {
     "success_delta": 2,
     "resource_drop": 2,
-    "old_budget_crossing": 45,
-    "old_budget_crossing_runs": 2,
+    "tool_call_threshold": 45,
+    "tool_ge_threshold_runs": 2,
     "deep_delta": 2,
     "non_resource_delta": 2,
     "resource_still_binding_min": 3,
@@ -45,7 +50,17 @@ def _safe_int(value: Any) -> int:
 
 
 def _empty_counts() -> dict[str, int]:
-    return {"n": 0, "ts": 0, "bud": 0, "tout": 0, "res": 0, "over40": 0, "deep": 0, "nonres": 0}
+    return {
+        "n": 0,
+        "ts": 0,
+        "bud": 0,
+        "tout": 0,
+        "res": 0,
+        "tool_ge_45": 0,
+        "deep": 0,
+        "nonres": 0,
+        "provider_attrition": 0,
+    }
 
 
 def _copy_counts(value: dict[str, int] | None) -> dict[str, int]:
@@ -58,7 +73,7 @@ def _copy_counts(value: dict[str, int] | None) -> dict[str, int]:
 
 
 def _add_counts(target: dict[str, int], value: dict[str, int]) -> None:
-    for key in ("n", "ts", "bud", "tout", "over40", "deep", "nonres"):
+    for key in ("n", "ts", "bud", "tout", "tool_ge_45", "deep", "nonres", "provider_attrition"):
         target[key] += _safe_int(value.get(key))
     target["res"] = target["bud"] + target["tout"]
 
@@ -100,11 +115,15 @@ def _is_success(value: Any) -> bool:
 def _count_result(result: dict[str, Any], architecture: str) -> dict[str, int]:
     counts = _empty_counts()
     counts["n"] = 1
+    failure_kind = str(result.get("failure_kind") or "")
+    if failure_kind.startswith("provider_"):
+        counts["provider_attrition"] = 1
+        return counts
     status = str(result.get("status") or "")
     counts["ts"] = int(_is_success(result.get("success")))
     counts["bud"] = int(status == "budget_exhausted")
     counts["tout"] = int(status == "timed_out")
-    counts["over40"] = int(_safe_int(result.get("tool_calls")) >= FORMULAS["old_budget_crossing"])
+    counts["tool_ge_45"] = int(_safe_int(result.get("tool_calls")) >= FORMULAS["tool_call_threshold"])
     counts["deep"] = int(is_deep_progress(architecture, _last_stage(result), _attempts(result)))
     if not counts["ts"] and derive_failure_detail(result) in NON_RESOURCE_DETAILS:
         counts["nonres"] = 1
@@ -123,7 +142,7 @@ def classify_relaxed(anchor: dict[str, int], relaxed: dict[str, int]) -> dict[st
     success = relaxed_counts["ts"] >= anchor_counts["ts"] + FORMULAS["success_delta"]
     exhaustion = relaxed_counts["res"] <= anchor_counts["res"] - FORMULAS["resource_drop"]
     progress = (
-        relaxed_counts["over40"] >= FORMULAS["old_budget_crossing_runs"]
+        relaxed_counts["tool_ge_45"] >= FORMULAS["tool_ge_threshold_runs"]
         or relaxed_counts["deep"] >= anchor_counts["deep"] + FORMULAS["deep_delta"]
     )
     relief = exhaustion or progress
@@ -170,7 +189,7 @@ def map_q1(cells: dict[str, dict[str, int]]) -> dict[str, Any]:
         signal = "no axis-order signal / inconclusive"
     return {
         "signal": signal,
-        "budget_priority_pattern": relief_b and budget["bud"] == 0 and timeout["bud"] >= 1,
+        "budget_priority_pattern": relief_b and relief_t and budget["bud"] == 0 and timeout["bud"] >= 1,
     }
 
 
@@ -202,6 +221,167 @@ def map_q2(cells: dict[str, dict[str, int]]) -> dict[str, Any]:
         "dual_axis_conversion": conversion,
         "time_still_binding": still_binding,
     }
+
+
+def _completion_options(cell: str) -> list[dict[str, int]]:
+    terminals = (
+        {"ts": 1, "bud": 0, "tout": 0, "nonres": 0},
+        {"ts": 0, "bud": 1, "tout": 0, "nonres": 0},
+        {"ts": 0, "bud": 0, "tout": 1, "nonres": 0},
+        {"ts": 0, "bud": 0, "tout": 0, "nonres": 1},
+        {"ts": 0, "bud": 0, "tout": 0, "nonres": 0},
+    )
+    tool_values = (0, 1) if cell in {"B", "J"} else (0,)
+    return [{**terminal, "deep": deep, "tool_ge_45": tool} for terminal in terminals for deep in (0, 1) for tool in tool_values]
+
+
+def _completed_cell_candidates(cell: str, observed: dict[str, int]) -> list[dict[str, int]]:
+    base = _copy_counts(observed)
+    attrition = base["provider_attrition"]
+    if attrition == 0:
+        return [base]
+    candidates: dict[tuple[int, ...], dict[str, int]] = {}
+    for assignments in product(_completion_options(cell), repeat=attrition):
+        current = dict(base)
+        for assignment in assignments:
+            for key, value in assignment.items():
+                current[key] += value
+        current["res"] = current["bud"] + current["tout"]
+        identity = tuple(current[key] for key in sorted(current))
+        candidates[identity] = current
+    return [candidates[key] for key in sorted(candidates)]
+
+
+def analyze_provider_sensitivity(
+    architecture: str,
+    cells: dict[str, dict[str, int]],
+    *,
+    evidence_complete: bool,
+    scheduled_n: int = 6,
+    formal_labels: bool = True,
+) -> dict[str, Any]:
+    normalized = {label: _copy_counts(cells.get(label)) for label in CELL_DIRS}
+    clean_by_cell = {
+        label: value["n"] - value["provider_attrition"] for label, value in normalized.items()
+    }
+    attrition_values = [normalized[label]["provider_attrition"] for label in CELL_DIRS]
+    attrition_range = max(attrition_values) - min(attrition_values)
+    base: dict[str, Any] = {
+        "architecture": architecture,
+        "scheduled_n": scheduled_n,
+        "clean_by_cell": clean_by_cell,
+        "provider_attrition_by_cell": {label: normalized[label]["provider_attrition"] for label in CELL_DIRS},
+        "attrition_range": attrition_range,
+    }
+    if not formal_labels or scheduled_n == 3:
+        return {
+            **base,
+            "qualification": "single-case evidence / repository-level corroboration inconclusive",
+            "raw_counts": normalized,
+            "raw_deltas": {label: _delta(normalized["A"], normalized[label]) for label in ("B", "T", "J")},
+        }
+
+    failures: list[str] = []
+    if any(value["n"] != scheduled_n for value in normalized.values()):
+        failures.append("scheduled_n")
+    if any(clean < 5 for clean in clean_by_cell.values()):
+        failures.append("minimum_clean_per_cell")
+    if attrition_range > 1:
+        failures.append("max_attrition_range")
+    if sum(attrition_values) and not evidence_complete:
+        failures.append("provider_evidence_incomplete")
+    if failures:
+        result = {
+            **base,
+            "qualification": "provider-attrition / inconclusive",
+            "qualification_failures": failures,
+            "states": {
+                label: {"qualified": False, "state": "provider-attrition / inconclusive", "candidates": []}
+                for label in ("B", "T", "J")
+            },
+            "q1": {"qualified": False, "signal": "provider-attrition / inconclusive", "candidates": []},
+        }
+        if architecture == "plan-execute":
+            result["q2"] = {"qualified": False, "signal": "provider-attrition / inconclusive", "candidates": []}
+        return result
+
+    cell_candidates = {label: _completed_cell_candidates(label, normalized[label]) for label in CELL_DIRS}
+    state_candidates = {label: set() for label in ("B", "T", "J")}
+    q1_candidates: set[tuple[str, bool]] = set()
+    q2_candidates: set[tuple[str, bool, bool, bool]] = set()
+    completion_count = 0
+    for anchor, budget, timeout, joint in product(
+        cell_candidates["A"], cell_candidates["B"], cell_candidates["T"], cell_candidates["J"]
+    ):
+        completion_count += 1
+        completed = {"A": anchor, "B": budget, "T": timeout, "J": joint}
+        for label in ("B", "T", "J"):
+            state_candidates[label].add(classify_relaxed(anchor, completed[label])["state"])
+        q1 = map_q1(completed)
+        q1_candidates.add((q1["signal"], q1["budget_priority_pattern"]))
+        if architecture == "plan-execute":
+            q2 = map_q2(completed)
+            q2_candidates.add(
+                (
+                    q2["signal"],
+                    q2["time_wall_shift"],
+                    q2["dual_axis_conversion"],
+                    q2["time_still_binding"],
+                )
+            )
+
+    states: dict[str, Any] = {}
+    any_sensitive = False
+    for label, candidates in state_candidates.items():
+        ordered = sorted(candidates)
+        qualified = len(ordered) == 1
+        any_sensitive |= not qualified
+        states[label] = {
+            "qualified": qualified,
+            "state": ordered[0] if qualified else "provider-sensitive / inconclusive",
+            "candidates": ordered,
+        }
+    ordered_q1 = [
+        {"signal": signal, "budget_priority_pattern": pattern}
+        for signal, pattern in sorted(q1_candidates)
+    ]
+    q1_qualified = len(ordered_q1) == 1
+    any_sensitive |= not q1_qualified
+    result = {
+        **base,
+        "qualification": "provider-sensitive / inconclusive" if any_sensitive else "qualified",
+        "qualification_failures": [],
+        "completion_count": completion_count,
+        "states": states,
+        "q1": {
+            "qualified": q1_qualified,
+            "signal": ordered_q1[0]["signal"] if q1_qualified else "provider-sensitive / inconclusive",
+            "budget_priority_pattern": ordered_q1[0]["budget_priority_pattern"] if q1_qualified else None,
+            "candidates": ordered_q1,
+        },
+    }
+    if architecture == "plan-execute":
+        ordered_q2 = [
+            {
+                "signal": signal,
+                "time_wall_shift": shift,
+                "dual_axis_conversion": conversion,
+                "time_still_binding": binding,
+            }
+            for signal, shift, conversion, binding in sorted(q2_candidates)
+        ]
+        q2_qualified = len(ordered_q2) == 1
+        if not q2_qualified:
+            result["qualification"] = "provider-sensitive / inconclusive"
+        result["q2"] = {
+            "qualified": q2_qualified,
+            "signal": ordered_q2[0]["signal"] if q2_qualified else "provider-sensitive / inconclusive",
+            "time_wall_shift": ordered_q2[0]["time_wall_shift"] if q2_qualified else None,
+            "dual_axis_conversion": ordered_q2[0]["dual_axis_conversion"] if q2_qualified else None,
+            "time_still_binding": ordered_q2[0]["time_still_binding"] if q2_qualified else None,
+            "candidates": ordered_q2,
+        }
+    return result
 
 
 def _resolve_report_path(cell_root: Path, report_dir: Any) -> Path | None:
@@ -313,7 +493,7 @@ def _delta(anchor: dict[str, int], current: dict[str, int]) -> dict[str, int]:
         "res_delta": current["res"] - anchor["res"],
         "bud_delta": current["bud"] - anchor["bud"],
         "tout_delta": current["tout"] - anchor["tout"],
-        "over40_delta": current["over40"] - anchor["over40"],
+        "tool_ge_45_delta": current["tool_ge_45"] - anchor["tool_ge_45"],
         "deep_delta": current["deep"] - anchor["deep"],
         "nonres_delta": current["nonres"] - anchor["nonres"],
     }
@@ -326,33 +506,34 @@ def _sign(value: int) -> int:
 def _relief_without_n(anchor: dict[str, int], current: dict[str, int]) -> bool:
     return (
         current["res"] <= anchor["res"] - FORMULAS["resource_drop"]
-        or current["over40"] >= FORMULAS["old_budget_crossing_runs"]
+        or current["tool_ge_45"] >= FORMULAS["tool_ge_threshold_runs"]
         or current["deep"] >= anchor["deep"] + FORMULAS["deep_delta"]
     )
 
 
-def _threshold_payload(anchor: dict[str, dict[str, int]]) -> dict[str, Any]:
+def _threshold_payload(anchor: dict[str, dict[str, int]], analysis_spec_sha256: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
+        "analysis_spec_sha256": analysis_spec_sha256,
         "source_cell": CELL_DIRS["A"],
         "formulas": dict(FORMULAS),
         "anchor": {architecture: _copy_counts(anchor.get(architecture)) for architecture in KNOWN_ARCHITECTURES},
     }
 
 
-def _ensure_thresholds(path: Path, anchor: dict[str, dict[str, int]]) -> None:
-    payload = _threshold_payload(anchor)
+def _ensure_thresholds(path: Path, anchor: dict[str, dict[str, int]], analysis_spec_sha256: str) -> None:
+    payload = _threshold_payload(anchor, analysis_spec_sha256)
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"invalid thresholds file: {type(exc).__name__}") from exc
-        for key in ("schema_version", "source_cell", "formulas"):
+        for key in ("schema_version", "analysis_spec_sha256", "source_cell", "formulas"):
             if existing.get(key) != payload[key]:
                 raise RuntimeError("existing snapshot thresholds mismatch; use a new batch root")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_stable_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 def _build_per_case(cell_data: dict[str, dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
@@ -386,6 +567,32 @@ def _build_pooled(cell_data: dict[str, dict[str, Any]], warnings: list[str]) -> 
         cells[architecture] = {
             label: _copy_counts(cell_data[label]["architectures"].get(architecture)) for label in CELL_DIRS
         }
+    per_case = _build_per_case(cell_data, warnings)
+    single_case = len(per_case["cells"]) == 1
+    expected_n = 3 if single_case else FORMULAS["expected_pooled_n"]
+    incomplete: list[str] = []
+    for architecture in KNOWN_ARCHITECTURES:
+        for label in CELL_DIRS:
+            if cells[architecture][label]["n"] != expected_n:
+                incomplete.append(f"{architecture}/{label}")
+    if single_case:
+        return {
+            "schema_version": 1,
+            "branch": "single_case",
+            "status": "complete" if not incomplete else "incomplete",
+            "incomplete": incomplete,
+            "comparison_qualification": "single-case evidence / repository-level corroboration inconclusive",
+            "cells": cells,
+            "raw_deltas": {
+                architecture: {
+                    label: _delta(cells[architecture]["A"], cells[architecture][label])
+                    for label in ("B", "T", "J")
+                }
+                for architecture in KNOWN_ARCHITECTURES
+            },
+            "mixed_direction": per_case["mixed_direction"],
+            "warnings": list(warnings),
+        }
     states: dict[str, dict[str, Any]] = {}
     q1: dict[str, Any] = {}
     for architecture in ("multi-agent", "plan-execute"):
@@ -395,7 +602,6 @@ def _build_pooled(cell_data: dict[str, dict[str, Any]], warnings: list[str]) -> 
         q1[architecture] = map_q1(cells[architecture])
     q2 = map_q2(cells["plan-execute"])
     divergence: dict[str, dict[str, Any]] = {}
-    per_case = _build_per_case(cell_data, warnings)
     for architecture in ("multi-agent", "plan-execute"):
         divergence[architecture] = {}
         for label in ("B", "T", "J"):
@@ -408,13 +614,9 @@ def _build_pooled(cell_data: dict[str, dict[str, Any]], warnings: list[str]) -> 
                 "case_relief": case_relief,
                 "divergent": len(set(case_relief.values())) > 1,
             }
-    incomplete: list[str] = []
-    for architecture in KNOWN_ARCHITECTURES:
-        for label in CELL_DIRS:
-            if cells[architecture][label]["n"] != FORMULAS["expected_pooled_n"]:
-                incomplete.append(f"{architecture}/{label}")
     return {
         "schema_version": 1,
+        "branch": "two_case",
         "status": "complete" if not incomplete else "incomplete",
         "incomplete": incomplete,
         "cells": cells,
@@ -427,11 +629,10 @@ def _build_pooled(cell_data: dict[str, dict[str, Any]], warnings: list[str]) -> 
     }
 
 
-def _write_report(root: Path, pooled: dict[str, Any], per_case: dict[str, Any], records: Iterable[dict[str, Any]]) -> str:
+def _write_report(pooled: dict[str, Any], per_case: dict[str, Any], records: Iterable[dict[str, Any]]) -> str:
     lines = [
         "# Mokioclaw snapshot analysis",
         "",
-        f"- Root: `{root}`",
         f"- Status: **{pooled['status']}**",
         "",
         "## Run ledger",
@@ -442,14 +643,25 @@ def _write_report(root: Path, pooled: dict[str, Any], per_case: dict[str, Any], 
         lines.append(
             f"| {record['cell_name']} | {record['case_id']} | {record['architecture']} | {record['repeat']} | `{record['report_dir']}` |"
         )
-    lines.extend(["", "## Pooled states", "", "| Architecture | Cell | State | Relief | Failure migration |", "|---|---|---|---|---|"])
-    for architecture, state_map in pooled["states"].items():
-        for label, state in state_map.items():
-            lines.append(f"| {architecture} | {label} | {state['state']} | {state['relief']} | {state['failure_migration']} |")
-    lines.extend(["", "## Q1", ""])
-    for architecture, mapping in pooled["q1"].items():
-        lines.append(f"- `{architecture}`: {mapping['signal']} (budget-priority pattern: {mapping['budget_priority_pattern']})")
-    lines.extend(["", "## Q2", "", f"- plan-execute: {pooled['q2']['signal']}", "", "## Warnings", ""])
+    if pooled.get("branch") == "single_case":
+        lines.extend(
+            [
+                "",
+                "## Descriptive resource migration",
+                "",
+                f"- Qualification: {pooled['comparison_qualification']}",
+            ]
+        )
+    else:
+        lines.extend(["", "## Pooled states", "", "| Architecture | Cell | State | Relief | Failure migration |", "|---|---|---|---|---|"])
+        for architecture, state_map in pooled["states"].items():
+            for label, state in state_map.items():
+                lines.append(f"| {architecture} | {label} | {state['state']} | {state['relief']} | {state['failure_migration']} |")
+        lines.extend(["", "## Q1", ""])
+        for architecture, mapping in pooled["q1"].items():
+            lines.append(f"- `{architecture}`: {mapping['signal']} (budget-priority pattern: {mapping['budget_priority_pattern']})")
+        lines.extend(["", "## Q2", "", f"- plan-execute: {pooled['q2']['signal']}"])
+    lines.extend(["", "## Warnings", ""])
     if pooled["warnings"]:
         lines.extend(f"- {warning}" for warning in pooled["warnings"])
     else:
@@ -461,7 +673,93 @@ def _write_report(root: Path, pooled: dict[str, Any], per_case: dict[str, Any], 
     return "\n".join(lines) + "\n"
 
 
-def write_snapshot_analysis(root: Path, thresholds_only: bool = False) -> dict[str, Path]:
+def _write_stable_text(path: Path, value: str) -> None:
+    path.write_text(value, encoding="utf-8", newline="\n")
+
+
+def _provider_evidence_complete(records: Iterable[dict[str, Any]]) -> bool:
+    for record in records:
+        result = record["result"]
+        failure_kind = str(result.get("failure_kind") or "")
+        if not failure_kind.startswith("provider_"):
+            continue
+        artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), dict) else {}
+        if not result.get("provider_phase"):
+            return False
+        if not result.get("telemetry_coverage"):
+            return False
+        if not artifacts.get("call_journal") or not artifacts.get("transport_ledger"):
+            return False
+    return True
+
+
+def _build_provider_sensitivity(cell_data: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {"schema_version": 1, "architectures": {}}
+    all_records = [record for data in cell_data.values() for record in data["records"]]
+    case_ids = sorted({record["case_id"] for record in all_records})
+    scheduled_n = 3 if len(case_ids) == 1 else 6
+    formal_labels = len(case_ids) != 1
+    for architecture in ("multi-agent", "plan-execute"):
+        cells = {
+            label: _copy_counts(cell_data[label]["architectures"].get(architecture)) for label in CELL_DIRS
+        }
+        architecture_records = [record for record in all_records if record["architecture"] == architecture]
+        result["architectures"][architecture] = analyze_provider_sensitivity(
+            architecture,
+            cells,
+            evidence_complete=_provider_evidence_complete(architecture_records),
+            scheduled_n=scheduled_n,
+            formal_labels=formal_labels,
+        )
+    return result
+
+
+def _build_react_canary(cell_data: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    vectors: dict[str, dict[str, list[int]]] = {}
+    for label in CELL_DIRS:
+        for record in cell_data[label]["records"]:
+            if record["architecture"] != "react":
+                continue
+            case_id = record["case_id"]
+            vector = vectors.setdefault(case_id, {}).setdefault(label, [0, 0, 0, 0, 0, 0])
+            result = record["result"]
+            failure_kind = str(result.get("failure_kind") or "")
+            if failure_kind.startswith("provider_"):
+                vector[5] += 1
+                continue
+            status = str(result.get("status") or "")
+            index = {
+                "passed": 0,
+                "budget_exhausted": 1,
+                "timed_out": 2,
+                "failed": 3,
+                "setup_failed": 4,
+            }.get(status, 3)
+            vector[index] += 1
+    cases: dict[str, Any] = {}
+    for case_id in sorted(vectors):
+        anchor = vectors[case_id].get("A", [0, 0, 0, 0, 0, 0])
+        cases[case_id] = {
+            "vectors": {label: vectors[case_id].get(label, [0, 0, 0, 0, 0, 0]) for label in CELL_DIRS},
+            "deltas": {
+                label: [current - base for current, base in zip(vectors[case_id].get(label, [0] * 6), anchor)]
+                for label in ("B", "T", "J")
+            },
+        }
+    return {
+        "schema_version": 1,
+        "vector_order": ["passed", "budget_exhausted", "timed_out", "failed", "setup_failed", "provider_attrition"],
+        "cases": cases,
+    }
+
+
+def write_snapshot_analysis(
+    root: Path,
+    thresholds_only: bool = False,
+    *,
+    analysis_spec_path: Path = DEFAULT_ANALYSIS_SPEC_PATH,
+) -> dict[str, Path]:
+    analysis_spec = load_analysis_spec(Path(analysis_spec_path))
     root = root.resolve()
     analysis_dir = root / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -469,7 +767,10 @@ def write_snapshot_analysis(root: Path, thresholds_only: bool = False) -> dict[s
         "thresholds": analysis_dir / "thresholds.json",
         "per_case": analysis_dir / "per-case.json",
         "pooled": analysis_dir / "pooled.json",
+        "provider_sensitivity": analysis_dir / "provider-sensitivity.json",
+        "react_canary": analysis_dir / "react-canary.json",
         "report": analysis_dir / "report.md",
+        "audit": analysis_dir / "analysis-audit.json",
     }
     warnings: list[str] = []
     labels = ("A",) if thresholds_only else tuple(CELL_DIRS)
@@ -477,17 +778,40 @@ def write_snapshot_analysis(root: Path, thresholds_only: bool = False) -> dict[s
         label: _load_cell(root, label, warnings) for label in labels
     }
     if thresholds_only:
-        _ensure_thresholds(paths["thresholds"], cell_data["A"]["architectures"])
+        _ensure_thresholds(paths["thresholds"], cell_data["A"]["architectures"], analysis_spec.sha256)
         return paths
     for label in CELL_DIRS:
         cell_data.setdefault(label, {"architectures": {}, "cases": {}, "records": []})
-    _ensure_thresholds(paths["thresholds"], cell_data["A"]["architectures"])
+    _ensure_thresholds(paths["thresholds"], cell_data["A"]["architectures"], analysis_spec.sha256)
     per_case = _build_per_case(cell_data, warnings)
     pooled = _build_pooled(cell_data, warnings)
     records = [record for data in cell_data.values() for record in data["records"]]
-    paths["per_case"].write_text(json.dumps(per_case, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    paths["pooled"].write_text(json.dumps(pooled, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    paths["report"].write_text(_write_report(root, pooled, per_case, records), encoding="utf-8")
+    provider_sensitivity = _build_provider_sensitivity(cell_data)
+    react_canary = _build_react_canary(cell_data)
+    for payload in (per_case, pooled, provider_sensitivity, react_canary):
+        payload["analysis_spec_sha256"] = analysis_spec.sha256
+    _write_stable_text(paths["per_case"], json.dumps(per_case, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    _write_stable_text(paths["pooled"], json.dumps(pooled, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    _write_stable_text(
+        paths["provider_sensitivity"],
+        json.dumps(provider_sensitivity, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _write_stable_text(paths["react_canary"], json.dumps(react_canary, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    _write_stable_text(paths["report"], _write_report(pooled, per_case, records))
+    paths["audit"].write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "hostname": socket.gethostname(),
+                "root": str(root),
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return paths
 
 
