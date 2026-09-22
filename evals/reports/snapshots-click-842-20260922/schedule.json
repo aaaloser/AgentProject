@@ -1,0 +1,699 @@
+{
+  "architectures": [
+    "react",
+    "plan-execute",
+    "multi-agent"
+  ],
+  "base_permutation": [
+    "cell-b80-t600",
+    "cell-b80-t900",
+    "anchor-b40-t600",
+    "cell-b40-t900"
+  ],
+  "case_ids": [
+    "click-choice-unicode-casefold-02",
+    "click-double-percent-option-prefix-01"
+  ],
+  "cells": [
+    "anchor-b40-t600",
+    "cell-b80-t600",
+    "cell-b40-t900",
+    "cell-b80-t900"
+  ],
+  "protocol_version": 2,
+  "rounds": {
+    "R1": [
+      "cell-b80-t600",
+      "cell-b80-t900",
+      "anchor-b40-t600",
+      "cell-b40-t900"
+    ],
+    "R2": [
+      "cell-b80-t900",
+      "anchor-b40-t600",
+      "cell-b40-t900",
+      "cell-b80-t600"
+    ],
+    "R3": [
+      "anchor-b40-t600",
+      "cell-b40-t900",
+      "cell-b80-t600",
+      "cell-b80-t900"
+    ]
+  },
+  "run_budget": 72,
+  "schedule_sha256": "1af480c562da6b3287da3e4283335978fc5d19c3800dfd06aa2f9d4a53a37157",
+  "schema_version": 2,
+  "seed": 20260922,
+  "slots": [
+    {
+      "architecture": "react",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "de5bec1d5f937cb9479b666709c55dfee5de1963c48779f62e3b78c08b715c83"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "7f134065907286268b8064214e321908b5197e84eba6440a6b3c3827f22eb96f"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "26cc4679b1ab8b27317a852ffea1c2d568404b59a27398b3e6a8d095d84a5ebc"
+    },
+    {
+      "architecture": "react",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "8ecb3fd64f5f8e78ec9bd581da2e8a8494fe3df54f704a5b036793330fcf973a"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "ac915c9af06ad2f6777559f633822ec28bf7d43a04bcd18b4a8f5b81d0b4866a"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "961e8959f2901046bf1118d62dbaf3a87044d9ee94428eaee9443b441f0de865"
+    },
+    {
+      "architecture": "react",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "c893ebe3dae68578d911d2b5806d95b5b8231c4b3227c663bb7cade1b8f7a115"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "f89a92ea563c9e81dd60eb9a3c45b3b2dd9412f5e5fd7420cf184821187bbdef"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "f4fc320f64ce421951fea6818144ec3bb5dfc75a4739ac2c0f2f7e021d816b32"
+    },
+    {
+      "architecture": "react",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "d8f5b261d182d3eeb149f785b2f5f2e673456971a0119f44589c4cf98f7078db"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "5ab7db7f01e5335f284a5a8a789d13236f39825ec4a9810e3507cb9f7f4f62b8"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "8e95170272490f4dc2ea37d1972ace6d415912db71e58e5dc74a52e77a0e3bed"
+    },
+    {
+      "architecture": "react",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "36f4f9a75cf6f6047ce42bb4816dab18ad554815d0f7e99ca27cbcfd206d76c4"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "346dbfe89d280abd579ad195085e3dfae0d98ed3a0e5f278ecf56067cdf2b2f9"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "fb01922197dea5316c73a2faecb0517f1ca661ad8a2033d1057bc69a5e4599d7"
+    },
+    {
+      "architecture": "react",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "2c43024037a294b9aae66007717394ce2e242c847c14e95b1503423b423d4a95"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "76fcce3f904381f6f0ed8cd35174a924dd04a9c5e0d79c0471667ebe2dca8de4"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "bc634a8a99b28c2a444de14a0ed64c47d65ae4c418fb77a845c612039f46fff4"
+    },
+    {
+      "architecture": "react",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "cd824f2d2b7190bcd419fff8c6d492341121ea4e2a3f3aeaaf856d15e33d821f"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "3f13fe0e67fc4cf96362b4ec4cc07c11333659d25f1dc78c6139ddbfbd900a1a"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "0497c9665384a57a1aa3d1245771e35b9d83381519a46db0646239dd301ba0bc"
+    },
+    {
+      "architecture": "react",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "a76c08d7b812e66af1d4f3dc4ab3abe352657bf76fde07786d01aba8dc88e65c"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "01a435d0b76b9569bec32a862a3c67ee0ad35497c2ffe42c872a28e25e154680"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 1,
+      "round": "R1",
+      "scheduled_run_id": "c7dfe82139ed3cb6b3efc2519bc0ad6400aee7bbb5085d09b25ae3f1bea479ed"
+    },
+    {
+      "architecture": "react",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "10e1d09dd82f4cf10199919e05dd4407f05759778106104e2d6d85d6209c68b9"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "7f8e23ab1469b19da24bbc9f78141a3277a99c28fe3937640555bb4df2e11887"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "9ad8d9c34b4775dad7669708bf68b7b7005507278a7533712ec1318f11445cad"
+    },
+    {
+      "architecture": "react",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "8a446be066e8ac3ff519762197a2b438740ba5abef46e44c883b9639c58af4fc"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "ad4aec5d1b031c06b66c2bf712adf2f2971d32a688780b6f3936c563178777c7"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "f40f29581f14f7ddef9f0dd1ca0083a5b1ef4b541e664a0121ef7d00cc681bf1"
+    },
+    {
+      "architecture": "react",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "180b5e0035660b0ebd84d1ef24225ee19bb5f8c58d040163324ffac083535571"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "d93258150182969dc2c9e7c34372711fbcf7b6bb34746a2ec2db03bcb70c83aa"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "e78b99228c362ca4623929a1c825aa603fe9a27be37ea09855628e5a8b33a3a5"
+    },
+    {
+      "architecture": "react",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "7d2837ee99f4e1a0566bcbfb32ff95dab949bc0ad36b8ec52f8183b6505614ba"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "d5e2f0fdc7e108bf366c799a475b2c14850b279577d2ebe8b3e2fe8e67326e4b"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "9f14fd7e1683d9002179498f1c9c4147304f0120f185fb62c942e92ef398d725"
+    },
+    {
+      "architecture": "react",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "c8529911fc775a9028ac85d27f7a8c6dc31ee3f79681e88b14bf0fce414467fa"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "ff585b287cc1c48b4e764a9327b77f749f6eaf858f8004c5b5a6b918be103665"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "af9069cf00ea3ad679de5552ce84955a5bbcbb94b666aff3c454f0bf31d5c2ac"
+    },
+    {
+      "architecture": "react",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "a0aa93659ca0518dc1dbf234dd18325bd068fc8d9ef3a0865ab10d40b1621c45"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "4837d20e4268c6ac25fd68efd079ed544a67333b1510cfac6ab81ca1cb1e85f6"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "43a40d95ef4a490ac08154018ea3ac235f725de7448dab2d47ba8ca062271e46"
+    },
+    {
+      "architecture": "react",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "acb76f152c31832473ece6892581f9920d8c6ff0b3531e5b2fd2f3c6781a2a44"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "87d536199b3d34454be78b2845de11f7727c40b07537fb2d7665725e7bfd08e5"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "65fe10d83546e6c0ddd06be0866afd5abd249a401acf95b6ca60ecaf57bf7f11"
+    },
+    {
+      "architecture": "react",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "15599330d14d8e693da4dd1491096e1198ab4aa8f5e06246f89e772d9baf6444"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "5e89129cc9ce80a542ac6eedaf17d669eed737832f2a9daaba3992d73845d32a"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 2,
+      "round": "R2",
+      "scheduled_run_id": "a067973898769abe8f6f52249a324cacdea1dcb36d0ef532053516b4c045ef53"
+    },
+    {
+      "architecture": "react",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "229ed8af304e6ae45fae7847145f880f84be733a66303deab1a40d2ebdc9c1a2"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "c9ead9da448b3a40f3f691f62f58daf559c4504a14f15de1216c3f1ce21cf38e"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 2,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "anchor-b40-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "73f0f1045e6a1c597e564e7d70979ee201d186047e1f497774cf2da70695f2ca"
+    },
+    {
+      "architecture": "react",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "3291a0b9d11b6aea9f7098d827dab8df0a09107d3b2870e7bc8407298b3bf2a7"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "07a2900eb4c68587791921a685e3de040495bc8dfe8d3b949929c27f10a3f852"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 2,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "anchor-b40-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "f69e29873c1f4f46723bbcb6ce3d9827778e3a0fca10746f40f73090ba76ab1e"
+    },
+    {
+      "architecture": "react",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "bd1399b31138736df019541508cae999eead42353796b615858dfc2479b45abd"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "e4ee581fda40841897390d72d2695e06cbd7bd3e785cf80d7311b272e2ee6f6f"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 3,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b40-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "ccb10815731f40ff2b5e12889a3c8d30866af8ad3765c05ae82764f02ce37b09"
+    },
+    {
+      "architecture": "react",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "ea5fb26cd41500058d8c80c7a06174e582935c04ee70172d3c14239a312a4b51"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "bfa143244f70083742ffba07019c22dec85182e493a3d8de186591892b105867"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 3,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b40-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "3e4969f888b9c8447059a663abc4c500b45c345a6445e9c492e068df8ade1f9e"
+    },
+    {
+      "architecture": "react",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "e248be733043e4bb6e8b0afc2e37f76e2f4290c07e8bd5685d828b3dfa06a34b"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "3764f2a5d2fea36385d9310f91653aa9cd1a9e99b300d4f30098a12f4c6b10b6"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 0,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "9ca6a86b3cdcd165f473160f0854d3b98a214b97c11459061763883542897c89"
+    },
+    {
+      "architecture": "react",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "9b5e4c85cc38c0f724d1f1de5f89a23be8288d8022edab29e7fa2f759dabc7c4"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "0b9376f04b163f9aa456c09beefdba87abea657ad644833a081c7a22de419586"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 0,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t600",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "30cb0d53d5b5498204650ce1cce218fe3e522db10a09e52512277101aef8a7ad"
+    },
+    {
+      "architecture": "react",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "c6edc8f0c22b11b38e3d8af371506c21cb0a70f470e7d8b82a8626a7314bad8f"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "f147b2800af2d418d722ae4afcba34a71a73103f1980e18f72ea92228c818fc6"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 1,
+      "case_id": "click-choice-unicode-casefold-02",
+      "cell": "cell-b80-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "5184fe243fcb7ea5f99efc31e1b55edbf1e46ff98eb4400598c04ff21f9990ac"
+    },
+    {
+      "architecture": "react",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "6e0b3bbb0927f644b8c14c618cfe27abed8df6954e45a6edd1e2d59b8a476f58"
+    },
+    {
+      "architecture": "plan-execute",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "5c04f250187ece89522adca2478fe3b590877826cf16422bbcaf1139b159e45b"
+    },
+    {
+      "architecture": "multi-agent",
+      "base_position": 1,
+      "case_id": "click-double-percent-option-prefix-01",
+      "cell": "cell-b80-t900",
+      "repeat": 3,
+      "round": "R3",
+      "scheduled_run_id": "25d5242bd0da3388af095fd0bbf975769da89028e27018d5ef81d7301db173a2"
+    }
+  ]
+}
+

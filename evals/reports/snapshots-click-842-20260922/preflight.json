@@ -1,0 +1,54 @@
+{
+  "agent_score": false,
+  "analysis_dry_run": {
+    "exit_code": 2,
+    "formal_effect_labels_emitted": false,
+    "q1_emitted": false,
+    "q2_emitted": false,
+    "status": "incomplete"
+  },
+  "case_acceptance": {
+    "click-choice-unicode-casefold-02": {
+      "fixture_validation": true,
+      "status": "PASS"
+    },
+    "click-double-percent-option-prefix-01": {
+      "fixture_validation": true,
+      "status": "PASS"
+    }
+  },
+  "checks": {
+    "analysis_dry_run_refusal": true,
+    "batch_root_fresh": true,
+    "case_acceptance": true,
+    "fingerprint_five_domains": true,
+    "image_resolution": true,
+    "manifest_empty": true,
+    "schedule_72_slots": true,
+    "sdk_retry_zero": true,
+    "secret_scan": true,
+    "source_resolution": true,
+    "transport_observable": true,
+    "worker_ledger_empty": true
+  },
+  "fixture_validation": true,
+  "hashes": {
+    "analysis_spec_sha256": "95503b83d5859265ee7e700debf240a4923454ba5519451cc07c99f3b75a3591",
+    "case_set_sha256": "26cec8430407e89a4191f05176b2cefbc564b5426d36fa7d3e95b0348d4ef555",
+    "identity_sha256": "ef3ffe7519cd5c8aaa69285d4b42dd1b95c62c38275f5d54e1b9fa278747266d",
+    "schedule_sha256": "1af480c562da6b3287da3e4283335978fc5d19c3800dfd06aa2f9d4a53a37157"
+  },
+  "image_resolution": {
+    "resolved": true,
+    "workspace_source": true
+  },
+  "initial_state": {
+    "manifest_exists": false,
+    "scheduled_slots": 72,
+    "worker_attempt_directories": 0,
+    "worker_ledger_exists": false
+  },
+  "schema_version": 1,
+  "status": "ready_for_g1_smoke_authorization"
+}
+
