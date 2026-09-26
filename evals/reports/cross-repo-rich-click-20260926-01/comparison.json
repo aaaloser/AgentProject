@@ -1,0 +1,176 @@
+{
+  "dimension_results": {
+    "multi_agent_q1": {
+      "click_budget_priority_pattern": false,
+      "click_label": "budget-axis directional signal",
+      "directional_corroboration": false,
+      "required": true,
+      "result": "divergent",
+      "rich_budget_priority_pattern": true,
+      "rich_label": "both axes independently influential",
+      "same_label": false,
+      "secondary_result": "secondary-divergence"
+    },
+    "plan_execute_q1": {
+      "click_budget_priority_pattern": false,
+      "click_label": "budget-axis directional signal",
+      "directional_corroboration": false,
+      "required": true,
+      "result": "divergent",
+      "rich_budget_priority_pattern": true,
+      "rich_label": "both axes independently influential",
+      "same_label": false,
+      "secondary_result": "secondary-divergence"
+    },
+    "plan_execute_q2": {
+      "click_label": "no time-wall migration signal / inconclusive",
+      "directional_corroboration": false,
+      "required": true,
+      "result": "inconclusive",
+      "rich_label": "no time-wall migration signal / inconclusive",
+      "same_label": true
+    }
+  },
+  "direction_comparison": "inconclusive",
+  "schema_version": 1,
+  "strict_audit_status": "legacy-audit-limited",
+  "supporting_audit": {
+    "click_audit_completeness": "complete",
+    "click_qualification": {
+      "multi-agent": "qualified",
+      "plan-execute": "qualified"
+    },
+    "per_case_divergence": {
+      "click": {
+        "multi-agent": {
+          "B": {
+            "case_relief": {
+              "click-choice-unicode-casefold-02": true,
+              "click-double-percent-option-prefix-01": true
+            },
+            "divergent": false
+          },
+          "J": {
+            "case_relief": {
+              "click-choice-unicode-casefold-02": true,
+              "click-double-percent-option-prefix-01": true
+            },
+            "divergent": false
+          },
+          "T": {
+            "case_relief": {
+              "click-choice-unicode-casefold-02": false,
+              "click-double-percent-option-prefix-01": false
+            },
+            "divergent": false
+          }
+        },
+        "plan-execute": {
+          "B": {
+            "case_relief": {
+              "click-choice-unicode-casefold-02": true,
+              "click-double-percent-option-prefix-01": true
+            },
+            "divergent": false
+          },
+          "J": {
+            "case_relief": {
+              "click-choice-unicode-casefold-02": true,
+              "click-double-percent-option-prefix-01": true
+            },
+            "divergent": false
+          },
+          "T": {
+            "case_relief": {
+              "click-choice-unicode-casefold-02": false,
+              "click-double-percent-option-prefix-01": false
+            },
+            "divergent": false
+          }
+        }
+      },
+      "rich": {
+        "multi-agent": {
+          "B": {
+            "case_relief": {
+              "rich-markdown-hyperlinks-option-01": true,
+              "rich-table-no-edge-measure-02": true
+            },
+            "divergent": false
+          },
+          "J": {
+            "case_relief": {
+              "rich-markdown-hyperlinks-option-01": true,
+              "rich-table-no-edge-measure-02": true
+            },
+            "divergent": false
+          },
+          "T": {
+            "case_relief": {
+              "rich-markdown-hyperlinks-option-01": true,
+              "rich-table-no-edge-measure-02": false
+            },
+            "divergent": true
+          }
+        },
+        "plan-execute": {
+          "B": {
+            "case_relief": {
+              "rich-markdown-hyperlinks-option-01": false,
+              "rich-table-no-edge-measure-02": true
+            },
+            "divergent": true
+          },
+          "J": {
+            "case_relief": {
+              "rich-markdown-hyperlinks-option-01": false,
+              "rich-table-no-edge-measure-02": true
+            },
+            "divergent": true
+          },
+          "T": {
+            "case_relief": {
+              "rich-markdown-hyperlinks-option-01": false,
+              "rich-table-no-edge-measure-02": true
+            },
+            "divergent": true
+          }
+        }
+      }
+    },
+    "provider_attrition": {
+      "click_by_architecture": {
+        "multi-agent": {
+          "A": 0,
+          "B": 0,
+          "J": 0,
+          "T": 0
+        },
+        "plan-execute": {
+          "A": 0,
+          "B": 0,
+          "J": 0,
+          "T": 0
+        }
+      },
+      "rich_legacy_count": 22
+    },
+    "rich_audit_completeness": "limited",
+    "rich_historical_worker_attempt_completeness": "limited",
+    "telemetry_coverage": {
+      "click": {
+        "full": 66,
+        "partial": 6,
+        "unavailable": 0
+      },
+      "rich": {
+        "full": 21,
+        "partial": 0,
+        "unavailable": 51,
+        "unavailable_reasons": {
+          "legacy_token_usage_missing": 51
+        }
+      }
+    }
+  }
+}
