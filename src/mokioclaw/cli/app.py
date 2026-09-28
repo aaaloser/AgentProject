@@ -159,13 +159,17 @@ def dashboard(
         typer.Option("--repo", help="Local Git repository to display. Repeat for multiple repositories; defaults to the current directory."),
     ] = None,
     no_browser: Annotated[bool, typer.Option("--no-browser", help="Start the local read-only service without opening a browser.")] = False,
+    task_root: Annotated[Path | None, typer.Option("--task-root", help="Store isolated local task copies here; Agent execution stays disabled.")] = None,
 ) -> None:
     """Browse commits and review priority for explicitly selected local Git repositories."""
     from mokioclaw.dashboard.catalog import CatalogRegistrationError
     from mokioclaw.dashboard.launcher import launch_dashboard
 
     try:
-        launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser)
+        if task_root is None:
+            launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser)
+        else:
+            launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser, task_root=task_root)
     except CatalogRegistrationError as exc:
         guidance = (
             "Git executable is unavailable. Install Git or add it to PATH."

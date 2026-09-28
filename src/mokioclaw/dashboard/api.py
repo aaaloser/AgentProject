@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import hmac
 from pathlib import Path
+import re
+import secrets
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,14 +19,20 @@ from mokioclaw.dashboard.git_reader import (
 )
 from mokioclaw.dashboard.pagination import CursorCodec, InvalidCursor
 from mokioclaw.dashboard.priority import RULE_VERSION, assess_commit
+from mokioclaw.dashboard.task_api import install_task_routes, task_error
+from mokioclaw.dashboard.task_service import TaskService
 
 
 def _error(status: int, code: str, message: str, retryable: bool = False) -> JSONResponse:
     return JSONResponse(status_code=status, content={"code": code, "message": message, "retryable": retryable})
 
 
-def create_dashboard_app(catalog: RepositoryCatalog, reader: LocalGitReader, cursor_codec: CursorCodec) -> FastAPI:
+def create_dashboard_app(
+    catalog: RepositoryCatalog, reader: LocalGitReader, cursor_codec: CursorCodec,
+    task_service: TaskService | None = None,
+) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    csrf_token = secrets.token_urlsafe(32)
     static_root = Path(__file__).with_name("static")
     app.mount("/static", StaticFiles(directory=static_root), name="dashboard-static")
     detail_cache: dict[tuple[str, str, str, str], dict] = {}
@@ -34,6 +43,34 @@ def create_dashboard_app(catalog: RepositoryCatalog, reader: LocalGitReader, cur
         host = request.headers.get("host", "").split(":", 1)[0].lower()
         if host != "127.0.0.1":
             response = _error(400, "invalid_host", "Use the local dashboard address.")
+        elif request.method == "POST" and request.url.path.startswith(("/api/tasks", "/api/task-previews")):
+            raw_host = request.headers.get("host", "")
+            origin = request.headers.get("origin", "")
+            token = request.headers.get("x-mokioclaw-csrf", "")
+            if not re.fullmatch(r"127\.0\.0\.1(?::(?:[1-9][0-9]{0,4}))?", raw_host) or origin != f"http://{raw_host}":
+                response = task_error(403, "invalid_origin", "Local write authorization failed.")
+            elif not hmac.compare_digest(token, csrf_token):
+                response = task_error(403, "invalid_csrf", "Local write authorization failed.")
+            elif request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+                response = task_error(415, "invalid_content_type", "A JSON request is required.")
+            else:
+                try:
+                    length = request.headers.get("content-length")
+                    if length is not None and (not length.isdigit() or int(length) > 16_384):
+                        response = task_error(413, "request_too_large", "The request is too large.")
+                    else:
+                        body = bytearray()
+                        async for chunk in request.stream():
+                            body.extend(chunk)
+                            if len(body) > 16_384:
+                                break
+                        if len(body) > 16_384:
+                            response = task_error(413, "request_too_large", "The request is too large.")
+                        else:
+                            request._body = bytes(body)
+                            response = await call_next(request)
+                except Exception:
+                    response = _error(500, "internal_error", "The request could not be completed.")
         else:
             try:
                 response = await call_next(request)
@@ -147,4 +184,5 @@ def create_dashboard_app(catalog: RepositoryCatalog, reader: LocalGitReader, cur
             detail_cache[cache_key] = result
         return result
 
+    install_task_routes(app, task_service, csrf_token)
     return app

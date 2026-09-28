@@ -119,10 +119,12 @@
 
 **Interfaces:** `create_dashboard_app(catalog, reader, cursor_codec, task_service: TaskService | None = None)` 保持旧三参数用法；`launch_dashboard(paths, *, open_browser=True, task_root: Path | None = None, task_image: str | None = None, enable_agent: bool = False)`。`TaskService.create_task(...) -> TaskRecord` 先持久化 `preparing`，将 `prepare_task()` 交给独立后台执行器，`POST /api/tasks` 立即返回 `202` 和 `task_id`；GET 轮询到 `prepared/failed`。无 `--task-root` 时返回 `task_unavailable` 且只读页面照常工作。
 
-- [ ] 写失败测试：旧 GET 响应字节契约不变；慢 Git 准备时 POST 快速返回 `202/preparing/task_id`、GET 后续观察、准备失败不留下可运行任务；预览 ID 与 repo/base/anchor/范围摘要不匹配、过期、跨任务 ID 访问拒绝；同幂等键同请求返回同一任务、异请求拒绝；active task 的第二个 run 返回 `409 task_busy`；无 Origin、外站 Origin、无／错 CSRF、超长 JSON 或未知字段的 POST 拒绝；异常不回显路径和私有文本。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行 `test_task_api.py test_task_launcher.py`，确认失败。
-- [ ] 用 `apply_patch` 实现进程令牌、精确 Origin/Host、请求大小与状态校验；任务路由只接受 JSON 和不透明 ID；CLI 仅新增可选 `--task-root`，不改变旧 dashboard 启动。
-- [ ] 新 `--basetemp` 重跑，并运行现有 `tests/dashboard/test_api.py tests/dashboard/test_launcher.py tests/test_cli_smoke.py`。
+  - [x] 写失败测试：旧 GET 响应字节契约不变；慢 Git 准备时 POST 快速返回 `202/preparing/task_id`、GET 后续观察、准备失败不留下可运行任务；预览 ID 与 repo/base/anchor/范围摘要不匹配、过期、跨任务 ID 访问拒绝；同幂等键同请求返回同一任务、异请求拒绝；active task 的第二个 run 返回 `409 task_busy`；无 Origin、外站 Origin、无／错 CSRF、超长 JSON 或未知字段的 POST 拒绝；异常不回显路径和私有文本。
+  - [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行 `test_task_api.py test_task_launcher.py`，确认失败。
+  - [x] 用 `apply_patch` 实现进程令牌、精确 Origin/Host、请求大小与状态校验；任务路由只接受 JSON 和不透明 ID；CLI 仅新增可选 `--task-root`，不改变旧 dashboard 启动。
+  - [x] 新 `--basetemp` 重跑，并运行现有 `tests/dashboard/test_api.py tests/dashboard/test_launcher.py tests/test_cli_smoke.py`。
+
+  Task 4 只开放预览、异步准备与状态轮询；`run` 固定返回能力不可用，审批和取消由后续任务实现。任务根用进程持有的锁文件防止第二个 dashboard 进程同时修改记录。
 
 ### Task 5: 假执行器、事件投影与页面纵向切片
 
