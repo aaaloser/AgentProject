@@ -13,6 +13,19 @@ const elements = {
   refreshList: document.getElementById("refresh-list"),
   refreshHead: document.getElementById("refresh-head"),
   loadMore: document.getElementById("load-more"),
+  taskPanel: document.getElementById("task-panel"),
+  taskSelection: document.getElementById("task-selection"),
+  taskScope: document.getElementById("task-scope"),
+  taskDescription: document.getElementById("task-description"),
+  taskPreview: document.getElementById("task-preview"),
+  taskCreate: document.getElementById("task-create"),
+  taskDemoRun: document.getElementById("task-demo-run"),
+  taskDemoCancel: document.getElementById("task-demo-cancel"),
+  taskStatus: document.getElementById("task-status"),
+  taskPreviewResult: document.getElementById("task-preview-result"),
+  taskSummary: document.getElementById("task-summary"),
+  taskEvents: document.getElementById("task-events"),
+  localMode: document.getElementById("local-mode"),
 };
 
 const priorityLabels = {
@@ -39,6 +52,8 @@ const fileTypeLabels = {
 const state = {
   repositories: [], repoId: null, anchorSha: null, currentHeadSha: null, selectedSha: null,
   commits: [], pinnedCommit: null, nextCursor: null, epoch: 0, detailEpoch: 0, pageController: null, detailController: null,
+  taskEpoch: 0, taskRepoId: null, taskBaseSha: null, taskId: null, taskPreviewData: null,
+  taskSequence: 0, taskController: null, taskTimer: null, taskToken: null, demoAvailable: false, taskIdempotency: null,
 };
 
 function node(tag, className = "", value = null) {
@@ -228,6 +243,10 @@ async function loadPage(cursor, epoch, restoreSha = null) {
 
 async function selectRepository(repoId, restoreSha = null) {
   if (!state.repositories.some((repository) => repository.id === repoId)) return;
+  if (state.repoId !== repoId) {
+    elements.taskScope.value = "";
+    elements.taskDescription.value = "";
+  }
   state.epoch += 1;
   state.detailEpoch += 1;
   if (state.pageController) state.pageController.abort();
@@ -236,6 +255,7 @@ async function selectRepository(repoId, restoreSha = null) {
   state.anchorSha = null;
   state.currentHeadSha = null;
   state.selectedSha = null;
+  resetTaskIdentity(repoId, null);
   state.commits = [];
   state.pinnedCommit = null;
   state.nextCursor = null;
@@ -347,6 +367,7 @@ async function selectCommit(sha) {
   const repoId = state.repoId;
   const anchorSha = state.anchorSha;
   state.selectedSha = sha;
+  resetTaskIdentity(repoId, sha);
   updateUrl(repoId, sha);
   renderCommits();
   showDetailPlaceholder("正在读取提交", `正在分析 ${shortSha(sha)} 的改动统计…`);
@@ -369,6 +390,183 @@ async function selectCommit(sha) {
     if (epoch !== state.epoch || detailEpoch !== state.detailEpoch || controller.signal.aborted && error.code !== "timeout") return;
     showDetailError(errorMessage(error, "提交详情读取"));
   }
+}
+
+const taskStateLabels = {
+  draft: "草稿", preparing: "正在准备副本", prepared: "副本已准备", running: "状态演示运行中",
+  awaiting_approval: "演示审批等待", verifying: "演示验证阶段", stopping: "正在收束演示",
+  cancelling: "正在停止演示", completed: "演示完成 · 未运行验证", failed: "演示失败",
+  cancelled: "演示已取消", timed_out: "超时", interrupted: "已中断", cleanup_failed: "清理失败 · 禁止新任务",
+};
+
+function resetTaskIdentity(repoId, sha) {
+  state.taskEpoch += 1;
+  if (state.taskController) state.taskController.abort();
+  if (state.taskTimer) window.clearTimeout(state.taskTimer);
+  state.taskRepoId = repoId;
+  state.taskBaseSha = sha;
+  state.taskId = null;
+  state.taskPreviewData = null;
+  state.taskIdempotency = null;
+  state.taskSequence = 0;
+  elements.taskPreviewResult.replaceChildren();
+  elements.taskSummary.replaceChildren();
+  elements.taskEvents.replaceChildren();
+  setStatus(elements.taskStatus, "");
+  elements.taskSelection.textContent = repoId && sha ? `固定提交 ${shortSha(sha)} · ${currentRepository()?.name || "已选仓库"}` : "先选择仓库和提交。";
+  elements.taskPreview.disabled = !repoId || !sha;
+  elements.taskCreate.disabled = true;
+  elements.taskDemoRun.disabled = true;
+  elements.taskDemoCancel.disabled = true;
+}
+
+async function postTask(path, payload, extraHeaders = {}) {
+  const controller = new AbortController();
+  state.taskController = controller;
+  const timer = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(path, {
+      method: "POST", credentials: "omit", cache: "no-store", signal: controller.signal,
+      headers: { "Content-Type": "application/json", "X-MokioClaw-CSRF": state.taskToken, ...extraHeaders },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`任务请求失败：${response.status}`);
+    return await response.json();
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function taskScope() {
+  return elements.taskScope.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+}
+
+async function previewTask() {
+  const epoch = state.taskEpoch;
+  const repoId = state.taskRepoId;
+  const sha = state.taskBaseSha;
+  const anchor = state.anchorSha;
+  if (!repoId || !sha || !anchor || !state.taskToken) return;
+  elements.taskCreate.disabled = true;
+  elements.taskPreviewResult.replaceChildren();
+  setStatus(elements.taskStatus, "正在预览固定提交范围…");
+  try {
+    const result = await postTask("/api/task-previews", {
+      repo_id: repoId, base_sha: sha, anchor_sha: anchor, source_read_scope: taskScope(),
+    });
+    if (epoch !== state.taskEpoch || repoId !== state.repoId || sha !== state.selectedSha) return;
+    state.taskPreviewData = result;
+    state.taskIdempotency = window.crypto.randomUUID();
+    const summary = node("p", "", `${result.file_count} 个文件 · ${result.total_bytes} 字节 · 10 分钟有效`);
+    elements.taskPreviewResult.replaceChildren(summary);
+    if (result.blocked_paths.length) {
+      elements.taskPreviewResult.append(node("p", "task-warning", "所选范围含不支持的文件，请调整范围后重试。"));
+      setStatus(elements.taskStatus, "预览存在阻断项。", true);
+    } else {
+      elements.taskCreate.disabled = false;
+      setStatus(elements.taskStatus, "预览已确认；可准备独立副本。", false);
+    }
+  } catch {
+    if (epoch === state.taskEpoch) setStatus(elements.taskStatus, "预览失败，请核对提交与相对路径。", true);
+  }
+}
+
+function taskNumber(id) { return Number(document.getElementById(id).value); }
+
+async function createTask() {
+  const epoch = state.taskEpoch;
+  const preview = state.taskPreviewData;
+  if (!preview || !state.taskIdempotency || !state.taskToken) return;
+  elements.taskCreate.disabled = true;
+  setStatus(elements.taskStatus, "正在建立任务记录…");
+  try {
+    const record = await postTask("/api/tasks", {
+      preview_id: preview.preview_id, repo_id: preview.repo_id, base_sha: preview.base_sha,
+      anchor_sha: preview.anchor_sha, source_read_scope: taskScope(),
+      description: elements.taskDescription.value, max_seconds: taskNumber("task-max-seconds"),
+      max_attempts: taskNumber("task-max-attempts"), verification_commands: [],
+      max_provider_calls: taskNumber("task-max-calls"), max_total_tokens: taskNumber("task-max-tokens"),
+      max_output_tokens_per_call: taskNumber("task-output-tokens"),
+    }, { "Idempotency-Key": state.taskIdempotency });
+    if (epoch !== state.taskEpoch || record.repo_id !== state.repoId || record.base_sha !== state.selectedSha) return;
+    state.taskId = record.task_id;
+    renderTaskRecord(record);
+    void pollTask(epoch);
+  } catch {
+    if (epoch === state.taskEpoch) {
+      elements.taskCreate.disabled = false;
+      setStatus(elements.taskStatus, "任务创建失败；请检查说明、范围和限额。", true);
+    }
+  }
+}
+
+function renderTaskRecord(record) {
+  const label = taskStateLabels[record.state] || "状态未知";
+  elements.taskSummary.replaceChildren(node("p", "", `任务 ${record.task_id} · ${label}`));
+  elements.taskDemoRun.disabled = !state.demoAvailable || record.state !== "prepared";
+  elements.taskDemoCancel.disabled = !["running", "awaiting_approval", "verifying"].includes(record.state);
+  setStatus(elements.taskStatus, label, ["failed", "cleanup_failed"].includes(record.state));
+}
+
+function renderTaskEvents(events) {
+  for (const event of events) {
+    if (event.sequence <= state.taskSequence || event.task_id !== state.taskId) continue;
+    state.taskSequence = event.sequence;
+    let label = event.kind;
+    if (event.kind === "state") label = taskStateLabels[event.data.state] || "状态更新";
+    else if (event.kind === "stage") label = `演示阶段：${event.data.phase}`;
+    else if (event.kind === "verification") label = "验证未运行（演示）";
+    else if (event.kind === "approval_request") label = "演示审批等待（无命令）";
+    else if (event.kind === "approval_decision") label = "演示审批决定（无命令执行）";
+    elements.taskEvents.append(node("li", "", `${event.sequence} · ${label}`));
+  }
+}
+
+async function pollTask(epoch) {
+  const taskId = state.taskId;
+  const repoId = state.taskRepoId;
+  const sha = state.taskBaseSha;
+  if (!taskId) return;
+  try {
+    const record = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, new AbortController());
+    if (epoch !== state.taskEpoch || taskId !== state.taskId || repoId !== state.repoId || sha !== state.selectedSha
+      || record.task_id !== taskId || record.repo_id !== repoId || record.base_sha !== sha) return;
+    renderTaskRecord(record);
+    const result = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}/events?after=${state.taskSequence}`, new AbortController());
+    if (epoch !== state.taskEpoch || taskId !== state.taskId || result.task_id !== taskId) return;
+    renderTaskEvents(result.events);
+    if (result.events.length === 100 || !["completed", "failed", "cancelled", "timed_out", "interrupted", "cleanup_failed", "prepared"].includes(record.state)) {
+      state.taskTimer = window.setTimeout(() => { void pollTask(epoch); }, 800);
+    }
+  } catch {
+    if (epoch === state.taskEpoch) setStatus(elements.taskStatus, "任务状态读取失败，请稍后重试。", true);
+  }
+}
+
+async function demoAction(action) {
+  const taskId = state.taskId;
+  const epoch = state.taskEpoch;
+  if (!taskId || !state.demoAvailable) return;
+  try {
+    const record = await postTask(`/api/tasks/${encodeURIComponent(taskId)}/demo-${action}`, {});
+    if (epoch !== state.taskEpoch || taskId !== state.taskId) return;
+    renderTaskRecord(record);
+    void pollTask(epoch);
+  } catch {
+    if (epoch === state.taskEpoch) setStatus(elements.taskStatus, "演示操作未完成。", true);
+  }
+}
+
+async function initializeTaskSession() {
+  try {
+    const session = await requestJson("/api/task-session", new AbortController());
+    if (!session.task_available) return;
+    state.taskToken = session.csrf_token;
+    state.demoAvailable = session.demo_available === true;
+    elements.taskPanel.hidden = false;
+    elements.localMode.lastChild.textContent = "仅本机 · 来源只读";
+    elements.taskPreview.disabled = !state.repoId || !state.selectedSha;
+  } catch { /* Commit review stays usable when task support is unavailable. */ }
 }
 
 async function initialize() {
@@ -396,4 +594,9 @@ async function initialize() {
 elements.refreshList.addEventListener("click", () => { if (state.repoId) void selectRepository(state.repoId); });
 elements.refreshHead.addEventListener("click", () => { if (state.repoId) void selectRepository(state.repoId); });
 elements.loadMore.addEventListener("click", () => { if (state.nextCursor) void loadPage(state.nextCursor, state.epoch); });
+elements.taskPreview.addEventListener("click", () => { void previewTask(); });
+elements.taskCreate.addEventListener("click", () => { void createTask(); });
+elements.taskDemoRun.addEventListener("click", () => { void demoAction("run"); });
+elements.taskDemoCancel.addEventListener("click", () => { void demoAction("cancel"); });
 void initialize();
+void initializeTaskSession();

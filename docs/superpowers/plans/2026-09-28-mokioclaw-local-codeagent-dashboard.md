@@ -132,10 +132,12 @@
 
 **Interfaces:** `project_task_event(raw: dict, task_id: str, attempt_id: int | None, sequence: int) -> PublicTaskEvent` 仅保留设计 §7 的枚举字段；`FakeTaskRunner` 注入 `TaskService`，不导入 provider 或启动真实 Agent。页面以任务 ID 轮询有界序号。
 
-- [ ] 写失败测试：原始 prompt/response、headers、endpoint/query、路径和秘密样例不会出现在 API、页面或任务 JSON；未知字段、错误 task ID、旧 attempt、重复／倒退序号不透传；A/B 仓库切换与迟到仓库／任务响应不串用；假运行显示 preparing/prepared/running/approval/verification/stopping/completed 与失败、取消、`cleanup_failed` 态。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 实现白名单投影、保守脱敏和页面任务面板；只用 `textContent`，保持现有三栏审查与窄屏／键盘可达。假运行控件标明“演示／无 provider”，真实运行能力门默认关闭。
-- [ ] 新 `--basetemp` 重跑；使用两个临时仓库的真实回环服务检查选仓库、固定 SHA、预览、准备、假状态、结果和停止后来源不变。
+  - [x] 写失败测试：原始 prompt/response、headers、endpoint/query、路径和秘密样例不会出现在 API、页面或任务 JSON；未知字段、错误 task ID、旧 attempt、重复／倒退序号不透传；A/B 仓库切换与迟到仓库／任务响应不串用；假运行显示 preparing/prepared/running/approval/verification/stopping/completed 与失败、取消、`cleanup_failed` 态。
+  - [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+  - [x] 用 `apply_patch` 实现白名单投影、保守脱敏和页面任务面板；只用 `textContent`，保持现有三栏审查与窄屏／键盘可达。假运行控件标明“演示／无 provider”，真实运行能力门默认关闭。
+  - [x] 新 `--basetemp` 重跑；使用两个临时仓库的真实回环服务检查选仓库、固定 SHA、预览、准备、假状态、结果和停止后来源不变。
+
+  Task 5 的演示事件仅含枚举字段，自动显示的“批准”与“验证阶段”都明确标成**演示／无命令**，验证结果为 `not_run`。实际浏览器用临时仓库操作过预览、准备、演示和结果；真实 Agent 仍未启用。A/B 迟到响应由前端 task epoch 与 repo/base/task 身份共同拒绝；后续真实工作流不得复用假批准作为执行授权。
 
 ### Task 6: 单次命令审批网关
 

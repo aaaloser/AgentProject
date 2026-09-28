@@ -53,7 +53,10 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
 
     @app.get("/api/task-session")
     def session() -> dict:
-        return {"csrf_token": csrf_token, "task_available": service is not None, "run_available": False}
+        return {
+            "csrf_token": csrf_token, "task_available": service is not None,
+            "demo_available": service is not None and service.fake_runner is not None, "run_available": False,
+        }
 
     @app.post("/api/task-previews")
     async def preview(request: Request):
@@ -121,3 +124,31 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
         if available().store.has_active_task(exclude_task_id=task_id):
             return task_error(409, "task_busy", "Another task is active; try again later.", True)
         return task_error(503, "run_unavailable", "Agent execution is not enabled.")
+
+    @app.post("/api/tasks/{task_id}/demo-run")
+    async def demo_run(task_id: str, request: Request):
+        if service is None or service.fake_runner is None:
+            return task_error(503, "demo_unavailable", "The status demonstration is unavailable.")
+        try:
+            await _body(request, frozenset())
+            if not _TASK_ID.fullmatch(task_id):
+                raise KeyError(task_id)
+            record = available().start_demo(task_id)
+        except (InvalidTaskRequest, KeyError):
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        except TaskConflict:
+            return task_error(409, "task_busy", "The demonstration cannot start now.", True)
+        return JSONResponse(status_code=202, content=_record(record))
+
+    @app.post("/api/tasks/{task_id}/demo-cancel")
+    async def demo_cancel(task_id: str, request: Request):
+        if service is None or service.fake_runner is None:
+            return task_error(503, "demo_unavailable", "The status demonstration is unavailable.")
+        try:
+            await _body(request, frozenset())
+            if not _TASK_ID.fullmatch(task_id):
+                raise KeyError(task_id)
+            record = available().cancel_demo(task_id)
+        except (InvalidTaskRequest, KeyError):
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        return _record(record)

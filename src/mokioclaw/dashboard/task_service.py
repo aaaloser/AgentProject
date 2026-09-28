@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import os
+import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 
 from mokioclaw.dashboard.catalog import RepositoryCatalog
 from mokioclaw.dashboard.git_reader import LocalGitReader
 from mokioclaw.dashboard.task_copy import PreparedTask, _validate_task_root, prepare_task
+from mokioclaw.dashboard.task_events import project_task_event
 from mokioclaw.dashboard.task_models import TaskRecord, TaskSpec
 from mokioclaw.dashboard.task_source import TaskSource
 from mokioclaw.dashboard.task_store import TaskConflict, TaskStore
@@ -21,6 +25,64 @@ class InvalidTaskRequest(ValueError):
 
 class TaskRootBusy(RuntimeError):
     """Another dashboard process owns this task directory."""
+
+
+class FakeTaskRunner:
+    """Exercise task states without importing an Agent, provider, or command executor."""
+
+    def __init__(self, *, step_delay: float = 0.05, outcome: str = "completed") -> None:
+        if outcome not in {"completed", "failed", "cleanup_failed"}:
+            raise ValueError("Unsupported demo outcome")
+        self.step_delay = step_delay
+        self.outcome = outcome
+
+    def run(self, service: TaskService, task_id: str) -> None:
+        try:
+            service.publish_demo_event(task_id, {"kind": "stage", "phase": "entry"})
+            time.sleep(self.step_delay)
+            service.publish_demo_event(task_id, {"kind": "stage", "phase": "planner"})
+            time.sleep(self.step_delay)
+            service.demo_transition(task_id, "running", "awaiting_approval")
+            service.publish_demo_event(task_id, {
+                "kind": "approval_request", "status": "waiting", "request_id": secrets.token_urlsafe(18),
+            })
+            time.sleep(self.step_delay)
+            service.publish_demo_event(task_id, {"kind": "approval_decision", "decision": "approved"})
+            service.demo_transition(task_id, "awaiting_approval", "running")
+            service.publish_demo_event(task_id, {"kind": "stage", "phase": "code_agent"})
+            time.sleep(self.step_delay)
+            service.demo_transition(task_id, "running", "verifying")
+            service.publish_demo_event(task_id, {"kind": "stage", "phase": "verifier"})
+            service.publish_demo_event(task_id, {"kind": "verification", "status": "not_run"})
+            time.sleep(self.step_delay)
+            service.demo_transition(task_id, "verifying", "stopping")
+            if self.outcome == "cleanup_failed":
+                service.demo_transition(task_id, "stopping", "cleanup_failed", {"failure_kind": "cleanup_failed"})
+            elif self.outcome == "failed":
+                service.demo_transition(task_id, "stopping", "failed", {
+                    "failure_kind": "demo_failure", "cleanup_confirmed": True,
+                })
+            else:
+                service.demo_transition(task_id, "stopping", "completed", {
+                    "verification_status": "not_run", "cleanup_confirmed": True,
+                })
+        except TaskConflict:
+            # Cancellation is resolved by demo_transition; a terminal race emits nothing further.
+            return
+        except Exception:
+            # Never expose exception text from a fake or future injected runner.
+            with service._lock:
+                current = service.store.get(task_id)
+                if current.state == "cancelling":
+                    service.store.transition(task_id, "cancelling", "cancelled", {"cleanup_confirmed": True})
+                else:
+                    if current.state in {"running", "awaiting_approval", "verifying"}:
+                        service.store.transition(task_id, current.state, "stopping", {})
+                        current = service.store.get(task_id)
+                    if current.state == "stopping":
+                        service.store.transition(task_id, "stopping", "failed", {
+                            "failure_kind": "demo_failure", "cleanup_confirmed": True,
+                        })
 
 
 class _TaskRootLease:
@@ -75,7 +137,10 @@ def _scope(payload: dict) -> tuple[str, ...]:
 
 
 class TaskService:
-    def __init__(self, catalog: RepositoryCatalog, reader: LocalGitReader, task_root: Path) -> None:
+    def __init__(
+        self, catalog: RepositoryCatalog, reader: LocalGitReader, task_root: Path,
+        *, fake_runner: FakeTaskRunner | None = None,
+    ) -> None:
         self.catalog = catalog
         self.reader = reader
         self.task_root = _validate_task_root(Path(task_root), catalog)
@@ -91,6 +156,8 @@ class TaskService:
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mokioclaw-prepare")
         self._lock = RLock()
         self._prepared: dict[str, PreparedTask] = {}
+        self._specs: dict[str, TaskSpec] = {}
+        self.fake_runner = fake_runner
 
     def close(self) -> None:
         self.pool.shutdown(wait=True, cancel_futures=False)
@@ -128,6 +195,7 @@ class TaskService:
         with self._lock:
             record = self.store.create(spec, idempotency_key)
             if record.state == "draft":
+                self._specs[record.task_id] = replace(spec, task_id=record.task_id, created_at=record.created_at)
                 record = self.store.transition(record.task_id, "draft", "preparing", {})
                 self.pool.submit(self._prepare, preview, record.task_id)
             return record
@@ -152,3 +220,43 @@ class TaskService:
             return self._prepared[task_id]
         except KeyError as exc:
             raise TaskConflict("Task has no prepared workspace") from exc
+
+    def publish_demo_event(self, task_id: str, raw: dict) -> None:
+        with self._lock:
+            current = self.store.get(task_id)
+            if current.state == "cancelling":
+                self.store.transition(task_id, "cancelling", "cancelled", {"cleanup_confirmed": True})
+                raise TaskConflict("Demo was cancelled")
+            event = project_task_event(raw, task_id, current.attempt_id, current.sequence + 1)
+            self.store.record_event(task_id, current.attempt_id, event)
+
+    def demo_transition(self, task_id: str, expected: str, target: str, update: dict | None = None) -> TaskRecord:
+        with self._lock:
+            current = self.store.get(task_id)
+            if current.state == "cancelling":
+                self.store.transition(task_id, "cancelling", "cancelled", {"cleanup_confirmed": True})
+                raise TaskConflict("Demo was cancelled")
+            return self.store.transition(task_id, expected, target, update or {})
+
+    def start_demo(self, task_id: str) -> TaskRecord:
+        with self._lock:
+            if self.fake_runner is None:
+                raise TaskConflict("Demo is unavailable")
+            record = self.store.get(task_id)
+            if self.store.has_active_task(exclude_task_id=task_id):
+                raise TaskConflict("Another task is active")
+            if record.state != "prepared" or task_id not in self._prepared:
+                raise TaskConflict("Task is not prepared")
+            record = self.store.transition(task_id, "prepared", "running", {})
+            self.pool.submit(self.fake_runner.run, self, task_id)
+            return record
+
+    def cancel_demo(self, task_id: str) -> TaskRecord:
+        with self._lock:
+            record = self.store.get(task_id)
+            if record.state == "prepared":
+                self.store.transition(task_id, "prepared", "cancelling", {})
+                return self.store.transition(task_id, "cancelling", "cancelled", {"cleanup_confirmed": True})
+            if record.state in {"running", "awaiting_approval", "verifying"}:
+                return self.store.transition(task_id, record.state, "cancelling", {})
+            return record

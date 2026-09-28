@@ -13,7 +13,7 @@ from mokioclaw.dashboard.api import create_dashboard_app
 from mokioclaw.dashboard.catalog import RepositoryCatalog
 from mokioclaw.dashboard.git_reader import LocalGitReader
 from mokioclaw.dashboard.pagination import CursorCodec
-from mokioclaw.dashboard.task_service import TaskService
+from mokioclaw.dashboard.task_service import FakeTaskRunner, TaskService
 
 
 def launch_dashboard(
@@ -23,7 +23,7 @@ def launch_dashboard(
     """Serve only explicitly registered local repositories until interrupted."""
     reader = LocalGitReader()
     catalog = RepositoryCatalog.from_paths(paths, reader)
-    task_service = TaskService(catalog, reader, task_root) if task_root is not None else None
+    task_service = TaskService(catalog, reader, task_root, fake_runner=FakeTaskRunner()) if task_root is not None else None
     try:
         app = create_dashboard_app(catalog, reader, CursorCodec(), task_service=task_service)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
