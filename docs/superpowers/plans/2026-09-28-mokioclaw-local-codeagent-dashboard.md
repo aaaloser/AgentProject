@@ -80,10 +80,10 @@
 
 **Interfaces:** `TaskSource.preview(repo_id: str, base_sha: str, anchor_sha: str, source_read_scope: tuple[str, ...]) -> TaskPreview`；`TaskPreview` 包含随机 `preview_id`、规范请求摘要、`manifest_digest`、文件数、总字节数、阻断项与 10 分钟到期时间。`manifest_digest` 是按规范化相对路径稳定排序的 `(relative_path, git_mode, blob_oid, blob_size)` 元组清单之规范 JSON UTF-8 字节的 SHA-256。第一版 `source_write_scope=source_read_scope`，scratch scope 固定为 work 下 `.mokioclaw/task-scratch/`。复用 V1 `RepositoryCatalog` 与 `LocalGitReader` 的 Git 环境／SHA 校验，不改变历史详情 API。
 
-- [ ] 写失败测试：不可达或非完整 SHA、跨仓库复用、空范围、非法相对路径、预览过期／范围变更拒绝；已跟踪 `.env` 与 symlink 只由树元数据识别，测试桩断言从不读取其 blob。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行 `tests/dashboard/test_task_source.py`，确认失败。
-- [ ] 用 `apply_patch` 实现 `git ls-tree -r -z` 等有界只读枚举、规范化范围与 `manifest_digest`；按设计 §5 的精确文件名、前缀、后缀和路径段排除规则过滤；禁用 Git 外部程序，保留 V1 超时／输出上限，不使用 checkout/archive/clone。
-- [ ] 新 `--basetemp` 重跑，确认通过；审阅 SHA-1/SHA-256、大小写冲突、Windows 保留名、gitlink、LFS 指针识别测试。其中 LFS 指针只对用户已批准的普通 blob 在准备阶段检测，预览标注“待内容检查”，不提前读取内容。
+- [x] 写失败测试：不可达或非完整 SHA、跨仓库复用、空范围、非法相对路径、预览过期／范围变更拒绝；已跟踪 `.env` 与 symlink 只由树元数据识别，测试桩断言从不读取其 blob。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行 `tests/dashboard/test_task_source.py`，确认失败。
+- [x] 用 `apply_patch` 实现 `git ls-tree -r -z` 等有界只读枚举、规范化范围与 `manifest_digest`；按设计 §5 的精确文件名、前缀、后缀和路径段排除规则过滤；禁用 Git 外部程序，保留 V1 超时／输出上限，不使用 checkout/archive/clone。
+- [x] 新 `--basetemp` 重跑，确认通过；审阅 SHA-1/SHA-256、大小写冲突、Windows 保留名、gitlink 测试。LFS 指针在预览仅标记“待内容检查”且不读取 blob，实际指针识别与拒绝由 Task 3A 测试。
 
 ## Phase B2 — 固定提交与独立副本
 
@@ -91,11 +91,11 @@
 
 **Files:** Create `src/mokioclaw/dashboard/task_copy.py`；test `tests/dashboard/test_task_copy.py`。
 
-**Interfaces:** `prepare_task(preview: TaskPreview, task_root: Path) -> PreparedTask` 仅从预览的 `base_sha/manifest_digest` 所指普通 blob 建立不可变 `baseline/` 和可写 `work/`；准备完复算清单。`task_root` 位于所有来源仓库、`.git` 和冻结证据路径之外。
+**Interfaces:** `prepare_task(preview: TaskPreview, task_root: Path, catalog: RepositoryCatalog, reader: LocalGitReader) -> PreparedTask` 从受信任 catalog 重新定位并核验 `repo_id` 的来源根，仅从预览的 `base_sha/manifest_digest` 所指普通 blob 建立不可变 `baseline/` 和可写 `work/`；准备完复算清单。`task_root` 位于所有来源仓库、`.git` 和冻结证据路径之外。
 
 - [ ] 写失败测试：task-root 越界；symlink、gitlink、LFS、大小写冲突、路径穿越、单文件及总量超限；预览 A 后 HEAD 变 B 仍复制 A，准备完成后 HEAD 再移动也不改变副本；来源移动、仓库身份替换、对象缺失或清单变更时失败且无可运行副本。双临时仓库的 HEAD、refs、index、status 和 ignored 夹具字节前后相同。
 - [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 实现 blob ID 定址读取、安全文件落盘、准备完成后原子发布；准备失败清理或隔离临时副本，绝不发布 `prepared`。
+- [ ] 用 `apply_patch` 实现来源根身份复核、blob ID 定址读取、安全文件落盘、准备完成后原子发布；准备失败清理或隔离临时副本，绝不发布 `prepared`。
 - [ ] 新 `--basetemp` 重跑并核对失败准备无残留可运行状态。
 
 ### Task 3B: 统一任务文件边界与补丁收集
