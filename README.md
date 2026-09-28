@@ -5,18 +5,24 @@
 <h1 align="center">MokioClaw</h1>
 
 <p align="center">
-  从零开始，一步步丰富一个真正能做事的 Agent 系统。
+  本地仓库审查工作台与可解释的 CodeAgent 实验项目。
 </p>
 
 ## 项目主旨
 
-MokioClaw 是一个教学优先的 Mini CodeAgent 项目。它按 Agent 系统自然生长的路径推进：先从 ToolCall 触碰文件和命令行开始，再升级到 LangGraph 显式工作流，然后继续引入 MultiAgent、Context Engineering、Harness Engineering、Skill 和更完整的 Claw 产品壳。
+MokioClaw 是一个教学优先的 Mini CodeAgent 项目。它按 Agent 系统自然生长的路径推进：先从 ToolCall 触碰文件和命令行开始，再升级到 LangGraph 显式工作流，然后继续引入 MultiAgent、Context Engineering、Harness Engineering、Skill 和更完整的 Claw 产品壳。当前新增的产品入口是**本地浏览器仓库审查工作台**：只读展示明确指定的 Git 仓库、提交历史、文件统计与可解释的改动审查优先级。
 
 项目的核心不是“写一个神秘黑盒”，而是把 Agent 如何规划、调用工具、交接子 Agent、验证结果讲清楚。每个阶段都要能运行、能展示、能解释。
 
 ## 当前阶段
 
-当前处于第 6 阶段的第一步：在 MultiAgent、Context Engineering、Harness Engineering 基础上，新增 Textual TUI 本地交互层。飞书 API 交互仍属于下一步。
+当前产品方向是先完成本地仓库审查核心。运行 `mokioclaw dashboard --repo <仓库路径> --repo <另一个仓库路径>` 后，浏览器左栏列出本次指定的仓库，中栏浏览各仓库的提交，右栏显示所选提交的审查优先级、规则依据和信息缺口。可以传入私有本地仓库；服务仅监听 `127.0.0.1`，不要求 GitHub 登录，也不会运行 Agent 或调用模型。完整步骤见[本地工作台演示说明](docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md)。
+
+本地核心已完成本轮验收：完整项目测试 535 passed、3 个 Windows 符号链接能力限制导致的 skipped、0 failed。运行完整 Docker 评测回归需要本机 Docker daemon 访问权限；工作台本身不依赖 Docker。
+
+这里的 `high`、`medium`、`low` 是人工审查顺序建议，`manual_review` 表示规则所需信息不足或提交类型超出规则。它们不是漏洞结论、事故概率或 Agent 修复成绩。私有 GitHub 账户接入和从页面启动 Agent 修复属于后续独立设计。
+
+下文记录既有 Agent/TUI 能力及教学背景；与只读工作台是不同的运行路径。此前第 6 阶段引入了 Textual TUI，飞书 API 交互仍未接入。
 
 第 3 阶段的图不再是固定的 `planner -> searchAgent -> codeAgent -> verifier` 顺序链路。现在外层 LangGraph 只有 supervisor 与验收循环：
 
@@ -55,7 +61,7 @@ final
 uv run mokioclaw "帮我查阅明日方舟阿米娅，并编写一个 HTML 介绍人物"
 ```
 
-这个任务适合展示 MultiAgent，因为它需要先查资料，再把资料转成可交付的 HTML 页面，最后由模型版 verifier 读取文件、执行检查、判断是否完成。第 4 阶段会在 planner/verifier 之间自动监控上下文 token，达到阈值后插入压缩节点，并把规则、工作记忆、历史摘要拆成独立层次展示。
+这个任务适合展示 MultiAgent，因为它需要先查资料，再把资料转成可交付的 HTML 页面，最后由模型版 verifier 读取文件、执行检查、判断是否完成。既有 Context Engineering 路径会在 planner/verifier 之间自动监控上下文 token，达到阈值后插入压缩节点，并把规则、工作记忆、历史摘要拆成独立层次展示。
 
 ## Context Engineering
 
@@ -89,7 +95,7 @@ MOKIO_CONTEXT_TOKEN_LIMIT=2000 uv run mokioclaw "帮我查阅明日方舟阿米�
 
 运行时终端会展示 `Memory Snapshot` 面板，显示三层摘要、todo 数、source 数、handoff 数，以及 `NOTEPAD.md` 和 `HISTORY_SUMMARY.md` 是否存在。这样可以直观看到 Context Engineering 不只是删消息，还把不同类型的信息放到了不同层里。
 
-## 当前 Tool 与 Agent 架构
+## 既有 Tool 与 Agent 架构
 
 | 节点 / Agent | 使用工具 | 职责 |
 | --- | --- | --- |
@@ -333,6 +339,24 @@ uv run mokioclaw --workspace .mokioclaw/workspaces/demo "帮我查阅明日方�
 
 ## 运行方式
 
+启动本地仓库审查工作台（Windows PowerShell；从项目根目录执行）：
+
+```powershell
+uv sync --locked
+uv run mokioclaw dashboard --repo "D:\path\to\repo-one" --repo "D:\path\to\repo-two"
+```
+
+服务启动后打开本机浏览器；加 `--no-browser` 可只打印本机地址，手动打开。按 `Ctrl+C` 停止。只传入你希望在本机页面显示的仓库路径；详细演示和故障排查见[演示说明](docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md)。
+
+已有 Python 环境安装了依赖，也可以不运行 `uv sync`，直接启动工作台：
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path 'src').Path
+& 'D:\envs\codeagent\Scripts\python.exe' -m mokioclaw dashboard --repo "D:\path\to\repo-one" --repo "D:\path\to\repo-two"
+```
+
+以下 `.env` 设置和 Agent 命令只用于既有 Agent 路径；启动 dashboard 不需要配置 provider 凭据。
+
 `.env` 配置：
 
 ```text
@@ -351,18 +375,18 @@ MOKIO_TRACE_MODE=on
 
 同步依赖：
 
-```bash
-uv sync
+```powershell
+uv sync --locked
 ```
 
 运行测试：
 
-```bash
+```powershell
 uv run pytest -q
 ```
 
 运行 Agent：
 
-```bash
+```powershell
 uv run mokioclaw "帮我查阅明日方舟阿米娅，并编写一个 HTML 介绍人物"
 ```

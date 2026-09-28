@@ -152,6 +152,30 @@ def tui(
     ).run()
 
 
+@app.command("dashboard")
+def dashboard(
+    repos: Annotated[
+        list[Path] | None,
+        typer.Option("--repo", help="Local Git repository to display. Repeat for multiple repositories; defaults to the current directory."),
+    ] = None,
+    no_browser: Annotated[bool, typer.Option("--no-browser", help="Start the local read-only service without opening a browser.")] = False,
+) -> None:
+    """Browse commits and review priority for explicitly selected local Git repositories."""
+    from mokioclaw.dashboard.catalog import CatalogRegistrationError
+    from mokioclaw.dashboard.launcher import launch_dashboard
+
+    try:
+        launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser)
+    except CatalogRegistrationError as exc:
+        guidance = (
+            "Git executable is unavailable. Install Git or add it to PATH."
+            if any(failure.reason == "Git executable is unavailable" for failure in exc.failures)
+            else "Check each local Git working tree."
+        )
+        safe_secho(f"Cannot open {len(exc.failures)} repository path(s). {guidance}", fg=typer.colors.RED)
+        raise typer.Exit(2) from None
+
+
 def _inline_approval_handler(request: ApprovalRequest) -> ApprovalDecision:
     from mokioclaw.cli.formatter import console
 

@@ -71,6 +71,24 @@ def _tree_sha256(root: Path, pattern: str = "*") -> str:
     return _file_set_sha256(root, paths)
 
 
+def _committed_agent_tree_sha256(commit: str) -> str:
+    prefix = "src/mokioclaw/"
+    names = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "--name-only", commit, "--", prefix],
+        cwd=PROJECT_ROOT, check=True, capture_output=True,
+    ).stdout.split(b"\0")
+    entries = []
+    for name in names:
+        if not name.endswith(b".py"):
+            continue
+        path = name.decode("utf-8")
+        content = subprocess.run(
+            ["git", "show", f"{commit}:{path}"], cwd=PROJECT_ROOT, check=True, capture_output=True,
+        ).stdout
+        entries.append([path.removeprefix(prefix), hashlib.sha256(content).hexdigest()])
+    return _canonical_sha256(sorted(entries))
+
+
 def _vendor_tree_sha256() -> str:
     template = EVAL_ROOT / "repos" / "templates" / "click"
     paths = [Path("pyproject.toml"), Path("LICENSE.txt"), Path("CHANGES.md")]
@@ -151,7 +169,7 @@ def test_click_fingerprint_recomputes_all_five_identity_domains(tmp_path: Path) 
         capture_output=True,
         text=True,
     ).stdout.strip() == "commit"
-    assert framework["agent_tree_sha256"] == _tree_sha256(PROJECT_ROOT / "src" / "mokioclaw", "*.py")
+    assert framework["agent_tree_sha256"] == _committed_agent_tree_sha256(FRAMEWORK_COMMIT)
     assert framework["prompt_config_sha256"] == _tree_sha256(PROJECT_ROOT / "src" / "mokioclaw" / "prompts", "*.py")
     assert framework["tool_schema_sha256"] == _tree_sha256(PROJECT_ROOT / "src" / "mokioclaw" / "tools", "*.py")
     assert framework["architecture_config_sha256"] == {

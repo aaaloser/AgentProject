@@ -1848,3 +1848,26 @@ Rich `snapshots-20260920/analysis` 三份冻结 SHA-256 仍与第 33.4 节完全
 Task 20 最终验收：指定 Windows Python、显式 `PYTHONPATH=src`、独立工作区 basetemp 的完整 pytest 为 **468 passed、2 Windows symlink capability skips、0 failed**；Ruff `--no-cache` 检查 `src tests evals/cross_repo_gate_adapter.py` 与 `git diff --check` 均通过。只读复算确认 Rich 三份冻结 hash、legacy 72 行和 22/22 worker-stage 504，Click 72-slot ledger/manifest/attempt/call/transport、canonical identity/schedule，Click 六份稳定分析产物和最终比较三份产物跨路径/时区/locale 字节一致。对相关产物与本报告共 8,054 个文本文件的秘密格式扫描为 0 命中、`.env` 文件为 0；没有读取 `.env` 秘密值。设计 §18 的 18 项完成定义已在阶段报告逐条审计，Rich `legacy-audit-limited` 与两项 Windows skip 继续明示。
 
 Task 20 提交前检查点的 checkout 为 `main`、HEAD `7c5c260fe632896d5e10cb5c6d96dd502655aa62`；当时 tracked 修改 0，untracked 为 `evals/cross_repo_gate_adapter.py` 与 `tests/evals/test_cross_repo_gate_adapter.py` 两个文件，报告和比较证据位于 ignored 路径。该检查点未清理 ignored 实验证据，也没有提交、push 或修改远端。后续本地提交由用户另行授权，此处记录的是集成前状态。
+
+---
+
+## 36. 2026-09-27 本地仓库审查工作台 V1（四阶段验收）
+
+### 36.1 范围与功能
+
+按已批准的本地工作台设计及四阶段计划，完成显式本地路径登记、只读 Git 读取、`review-priority-v1` 纯规则、回环 GET 服务、三栏浏览器页面和演示说明。页面左栏切换多个本地仓库，中栏按固定 HEAD 锚每页显示最多 50 条提交，右栏按需展示文件统计、固定理由和 `high`、`medium`、`low`、`manual_review` 四种人工审查优先级。普通/敏感路径/合并提交、浅克隆统计缺失、空历史、仓库移动、HEAD 更新、非法 SHA、输出超限与超时均有明确边界。没有 GitHub 登录、页面内 Agent 修复、provider 调用或新的正式实验槽位。
+
+Phase 4 新增边界测试发现 Git 可执行文件缺失时，登记层和 CLI 原先只显示笼统错误；现保留预定义且不含路径的可操作提示。还补了同名不同根目录、非法 SHA-256 长度、详情读取超时/截断不触发评估，以及双仓库真实回环服务的只读校验。后者使用 52 条普通提交、敏感路径提交和双父合并提交，检查 50+2 翻页与 `low`/`high`/`manual_review`，并比较两个临时来源仓库的 refs、index、含 ignored 项的状态与全部非 `.git` 文件内容，启动前后相同。该路径模拟禁止 Agent 流和 provider 初始化；演示文档中的临时夹具命令实际生成 52 条/5 条历史及双父合并。
+
+### 36.2 完整回归与冻结身份
+
+第一次受限环境完整 pytest 为 **504 passed、3 skipped、30 failed**：29 项 Docker fixture 因本机 Docker API 在沙箱内被拒绝，另 1 项旧 Click 测试把冻结实验的 `agent_tree_sha256` 与新增工作台后的活动源码树比较。本机 Docker daemon 经只读检查可用；在批准的本机 Docker 访问下重跑为 **533 passed、3 skipped、1 failed**，仅剩该旧断言。该测试现从指纹记录的冻结提交 `5e104fdfd5a9f24fbc3b7e1d9232983a484a421f` 读取 Git 树、按原 canonical 规则复算；所得 `3b8b8147ff36d9efd7a544b3acf8bbd607532de03d3bd4eb0dd4b39176d09908` 与原指纹相同。没有改动冻结指纹、分析产物或正式批次。
+
+修正后用指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 和已批准的 Docker 访问重跑完整项目：**535 passed、3 skipped、0 failed**，耗时 768.04 秒。3 项 skip 全为 Windows 符号链接创建能力限制（dashboard 1、eval grader 2）。FastAPI/Starlette TestClient 发出 1 条 `httpx` 弃用警告，不影响本轮通过；未来依赖升级再处理。`ruff check src tests`、`git diff --check` 和 `uv lock --check --offline` 通过。目标 32 个作者相关文件的秘密格式扫描为 0 命中；设计文档第 3–5 行有 3 处原有 Markdown 双空格换行，其他目标文件无行尾空白。
+最终单独重跑 `tests/dashboard tests/test_cli_smoke.py` 为 **74 passed、1 skipped、0 failed**。本轮最后一次范围扩展到 33 个作者相关文件（含 ignored 进度账），秘密格式扫描仍为 0 命中；排除设计文档原有 3 处 Markdown 换行后，行尾空白为 0。
+
+Rich 冻结 `thresholds.json`、`per-case.json`、`pooled.json` 的本轮只读 SHA-256 依次为 `B99BA64320362DED877777CA4BE9130BC08A8619A1BCB5CC3910D4E0721CABEB`、`167FC8EC4B48B03A3FD2F8248E0F653B085DF92498A78CFC4BF23571C98EA4FB`、`6F84A1281593994E7F9FF37F250F00DF366EB7BFEE14C0EC6ED8C638D1D069F2`，与第 35 节记录一致。最终比较根仍为 `evals/reports/cross-repo-rich-click-20260926-01/`，四个文件均在原位；本轮哈希分别为 `comparison.json`=`CFC2FA399B97DF5608A29374B1668813F72F42FDC77702FE8661781E0772A719`、`comparison.md`=`90E520EDEE820E42F58A98E1CCEDB49FDFC42BE71DE9358B3E5450105CC6892E`、`comparison-audit.json`=`045A1A23C4970E8E7AB065B80951D2D7D9003B86EA17975A021EF06AF169CAAB`、`input-hashes.json`=`843D52EF568E84391701A107F8CF58C827E51A5D98F150AB9CA0DC96A36B7675`。只读核对其两个 Q1 为 `divergent`、Q2 为 `inconclusive`、总方向 `inconclusive`、严格审计 `legacy-audit-limited`；这些不是本地工作台成绩。
+
+### 36.3 交付边界
+
+README 首页与 `docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md` 现在给出双仓库启动、`--no-browser`、指定 Python 环境备用命令、停止方式、四种优先级、临时夹具演示、截图隐私和故障排查。`.gitignore` 对演示、交接及已起草的工作台设计／计划文档使用精确放行规则；其他 ignored 评测证据仍在原位。工作在当前 `main` checkout 保持未提交；本阶段没有 commit、push、远端写入、真实 Agent run、provider 调用或正式槽位补跑。本地核心已完成本轮验收；GitHub 账户接入与 Agent 修复仍需后续单独设计与授权。

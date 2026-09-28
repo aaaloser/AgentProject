@@ -5,6 +5,7 @@ description = "A teaching-first mini CodeAgent built from ToolCall to Claw."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.115.0",
     "langchain>=1.2.15",
     "langchain-openai>=1.1.13",
     "langgraph>=1.1.6",
@@ -14,6 +15,7 @@ dependencies = [
     "tavily-python>=0.7.24",
     "textual>=8.2.4",
     "typer>=0.16.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.scripts]
@@ -22,6 +24,7 @@ mokioclaw-eval = "mokioclaw.evals.cli:app"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.0",
     "pytest>=8.0.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.13.0",

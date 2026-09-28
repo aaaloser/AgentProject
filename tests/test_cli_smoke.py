@@ -14,6 +14,12 @@ def test_cli_shows_help_without_task() -> None:
     assert "mokioclaw" in result.output
 
 
+def test_cli_lists_local_dashboard_command() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "dashboard" in result.output
+
+
 def test_cli_accepts_max_attempts_option_without_task() -> None:
     runner = CliRunner()
 

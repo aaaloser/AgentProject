@@ -1,0 +1,399 @@
+"use strict";
+
+const elements = {
+  dashboardStatus: document.getElementById("dashboard-status"),
+  repoCount: document.getElementById("repo-count"),
+  repoList: document.getElementById("repo-list"),
+  repoContext: document.getElementById("repo-context"),
+  commitStatus: document.getElementById("commit-status"),
+  commitList: document.getElementById("commit-list"),
+  commitCount: document.getElementById("commit-count"),
+  detailPanel: document.getElementById("detail-panel"),
+  headUpdate: document.getElementById("head-update"),
+  refreshList: document.getElementById("refresh-list"),
+  refreshHead: document.getElementById("refresh-head"),
+  loadMore: document.getElementById("load-more"),
+};
+
+const priorityLabels = {
+  high: "高优先级",
+  medium: "中优先级",
+  low: "低优先级",
+  manual_review: "需人工审查",
+};
+const priorityNotes = {
+  high: "建议优先安排人工审查；这不表示已经发现缺陷。",
+  medium: "建议按常规流程审查改动范围与引用。",
+  low: "规则命中较少，仍需正常代码审查。",
+  manual_review: "当前统计不足以机械判断，不能视为低风险。",
+};
+const limitationLabels = {
+  ci_not_checked: "CI 检查结果未取得",
+  tests_not_run: "测试执行结果未取得",
+  shallow_boundary: "浅克隆边界：父提交或变更统计不可得",
+};
+const fileTypeLabels = {
+  added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", type_changed: "T", unknown: "?",
+};
+
+const state = {
+  repositories: [], repoId: null, anchorSha: null, currentHeadSha: null, selectedSha: null,
+  commits: [], pinnedCommit: null, nextCursor: null, epoch: 0, detailEpoch: 0, pageController: null, detailController: null,
+};
+
+function node(tag, className = "", value = null) {
+  const item = document.createElement(tag);
+  if (className) item.className = className;
+  if (value !== null) item.textContent = String(value);
+  return item;
+}
+
+function setStatus(target, message, isError = false) {
+  target.textContent = message;
+  target.classList.toggle("is-error", isError);
+}
+
+function shortSha(sha) { return sha ? sha.slice(0, 8) : "—"; }
+
+function dateLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function currentRepository() { return state.repositories.find((item) => item.id === state.repoId) || null; }
+
+function updateUrl(repoId, sha) {
+  const url = new URL(window.location.href);
+  if (repoId) url.searchParams.set("repo", repoId);
+  else url.searchParams.delete("repo");
+  if (sha) url.searchParams.set("sha", sha);
+  else url.searchParams.delete("sha");
+  url.searchParams.delete("anchor");
+  window.history.replaceState(null, "", url);
+}
+
+async function requestJson(path, controller) {
+  let timedOut = false;
+  const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
+  try {
+    const response = await fetch(path, {
+      method: "GET", credentials: "omit", cache: "no-store", headers: { Accept: "application/json" }, signal: controller.signal,
+    });
+    if (!response.ok) {
+      let payload = {};
+      try { payload = await response.json(); } catch { /* Fixed fallback below. */ }
+      const error = new Error("请求未完成");
+      error.code = typeof payload.code === "string" ? payload.code : "request_error";
+      throw error;
+    }
+    return await response.json();
+  } catch (error) {
+    if (timedOut) {
+      const timeout = new Error("读取超时");
+      timeout.code = "timeout";
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function errorMessage(error, subject) {
+  if (error.code === "timeout" || error.code === "git_timeout") return `${subject}超时，请稍后重试。`;
+  if (error.code === "git_output_limit") return `${subject}内容过大，当前无法完整读取。`;
+  if (error.code === "repository_unavailable") return "仓库当前不可用；请确认本地目录仍存在。";
+  if (error.code === "commit_not_found") return "这条提交不在当前历史视图中。请刷新列表。";
+  if (error.code === "invalid_cursor") return "分页已失效，请刷新当前仓库。";
+  return `${subject}失败，请重试。`;
+}
+
+function showDetailPlaceholder(title, message) {
+  const wrapper = node("div", "empty-detail");
+  const art = node("div", "empty-art", "⌁");
+  art.setAttribute("aria-hidden", "true");
+  wrapper.append(art, node("h3", "", title), node("p", "", message));
+  elements.detailPanel.replaceChildren(wrapper);
+}
+
+function showDetailError(message) {
+  elements.detailPanel.replaceChildren(node("div", "detail-alert", message));
+}
+
+function renderRepositories() {
+  elements.repoList.replaceChildren();
+  elements.repoCount.textContent = String(state.repositories.length);
+  for (const repository of state.repositories) {
+    const button = node("button", "repo-card");
+    button.type = "button";
+    button.classList.toggle("is-selected", repository.id === state.repoId);
+    button.setAttribute("aria-pressed", String(repository.id === state.repoId));
+    button.setAttribute("aria-label", `仓库 ${repository.name}，${repository.branch || "detached HEAD"}`);
+    const nameRow = node("span", "repo-name-row");
+    const icon = node("span", "repo-icon", "⌂");
+    icon.setAttribute("aria-hidden", "true");
+    nameRow.append(icon, node("span", "repo-name", repository.name));
+    const meta = node("span", "repo-meta");
+    meta.append(node("span", "", repository.branch || "detached HEAD"));
+    const dirty = node("span", `state-chip${repository.dirty ? " dirty" : ""}`, repository.dirty ? "未提交变更" : "工作树干净");
+    meta.append(dirty);
+    button.append(nameRow, meta, node("span", "repo-path", repository.path));
+    button.addEventListener("click", () => { void selectRepository(repository.id); });
+    elements.repoList.append(button);
+  }
+}
+
+function renderRepositoryContext() {
+  const repository = currentRepository();
+  if (!repository) {
+    elements.repoContext.textContent = "选择一个仓库，查看其提交。";
+    return;
+  }
+  const name = node("span", "context-name", repository.name);
+  const separator = node("span", "context-separator", "/");
+  const branch = node("span", "", repository.branch || "detached HEAD");
+  const sha = node("span", "context-sha", state.currentHeadSha ? `HEAD ${shortSha(state.currentHeadSha)}` : "暂无提交");
+  elements.repoContext.replaceChildren(name, separator, branch, separator.cloneNode(true), sha);
+}
+
+function renderCommits() {
+  elements.commitList.replaceChildren();
+  const pinned = state.pinnedCommit && state.pinnedCommit.sha === state.selectedSha
+    && !state.commits.some((item) => item.sha === state.pinnedCommit.sha);
+  const visibleCommits = pinned ? [state.pinnedCommit, ...state.commits] : state.commits;
+  for (const commit of visibleCommits) {
+    const button = node("button", "commit-card");
+    button.type = "button";
+    button.classList.toggle("is-selected", commit.sha === state.selectedSha);
+    button.setAttribute("aria-pressed", String(commit.sha === state.selectedSha));
+    button.setAttribute("aria-label", `提交 ${shortSha(commit.sha)}，${commit.title}`);
+    const meta = node("span", "commit-meta");
+    meta.append(node("span", "commit-sha", shortSha(commit.sha)), node("span", "", dateLabel(commit.committed_at)));
+    if (commit.parent_count > 1) meta.append(node("span", "", "合并提交"));
+    if (pinned && commit.sha === state.pinnedCommit.sha) button.append(node("span", "pinned-note", "当前查看的历史提交 · 不在本页"));
+    button.append(node("span", "commit-title", commit.title), meta);
+    button.addEventListener("click", () => { void selectCommit(commit.sha); });
+    elements.commitList.append(button);
+  }
+  elements.commitCount.textContent = state.commits.length ? `已显示 ${state.commits.length} 条` : "每页最多 50 条提交";
+  elements.loadMore.hidden = !state.nextCursor;
+  elements.loadMore.disabled = false;
+}
+
+function renderHeadUpdate() {
+  elements.headUpdate.hidden = !state.anchorSha || !state.currentHeadSha || state.anchorSha === state.currentHeadSha;
+}
+
+async function loadPage(cursor, epoch, restoreSha = null) {
+  if (!state.repoId) return;
+  if (state.pageController) state.pageController.abort();
+  const controller = new AbortController();
+  state.pageController = controller;
+  const repoId = state.repoId;
+  const append = Boolean(cursor);
+  elements.loadMore.disabled = true;
+  setStatus(elements.commitStatus, append ? "正在加载更多提交…" : "正在读取提交历史…");
+  const path = `/api/repositories/${encodeURIComponent(repoId)}/commits${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`;
+  try {
+    const page = await requestJson(path, controller);
+    if (epoch !== state.epoch || repoId !== state.repoId) return;
+    if (page.repo_id !== repoId || (append && page.anchor_sha !== state.anchorSha)) throw new Error("提交视图身份不匹配");
+    state.anchorSha = page.anchor_sha;
+    state.currentHeadSha = page.current_head_sha;
+    state.nextCursor = page.next_cursor;
+    const known = new Set(append ? state.commits.map((item) => item.sha) : []);
+    state.commits = append ? state.commits : [];
+    for (const item of page.commits) {
+      if (!known.has(item.sha)) state.commits.push(item);
+    }
+    renderRepositoryContext();
+    renderHeadUpdate();
+    renderCommits();
+    elements.refreshList.disabled = false;
+    setStatus(elements.commitStatus, state.commits.length ? "" : "这个仓库还没有提交。", false);
+    if (!append) {
+      const validRestore = typeof restoreSha === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(restoreSha);
+      if (state.anchorSha && validRestore) void selectCommit(restoreSha);
+      else if (state.commits.length) void selectCommit(state.commits[0].sha);
+      else showDetailPlaceholder("暂无提交", "此仓库还没有可审查的历史提交。");
+    }
+  } catch (error) {
+    if (epoch !== state.epoch || controller.signal.aborted && error.code !== "timeout") return;
+    setStatus(elements.commitStatus, errorMessage(error, "提交列表读取"), true);
+    elements.loadMore.disabled = false;
+    if (!append) showDetailPlaceholder("无法读取历史", "请刷新当前仓库，或稍后重试。");
+  }
+}
+
+async function selectRepository(repoId, restoreSha = null) {
+  if (!state.repositories.some((repository) => repository.id === repoId)) return;
+  state.epoch += 1;
+  state.detailEpoch += 1;
+  if (state.pageController) state.pageController.abort();
+  if (state.detailController) state.detailController.abort();
+  state.repoId = repoId;
+  state.anchorSha = null;
+  state.currentHeadSha = null;
+  state.selectedSha = null;
+  state.commits = [];
+  state.pinnedCommit = null;
+  state.nextCursor = null;
+  updateUrl(repoId, null);
+  renderRepositories();
+  renderRepositoryContext();
+  renderCommits();
+  renderHeadUpdate();
+  elements.refreshList.disabled = true;
+  showDetailPlaceholder("正在准备审查", "读取当前仓库的提交历史后显示详情。");
+  await loadPage(null, state.epoch, restoreSha);
+}
+
+function appendSection(title, subtle = "") {
+  const section = node("section", "detail-section");
+  const heading = node("h3", "section-heading");
+  heading.append(node("span", "", title));
+  if (subtle) heading.append(node("span", "section-subtle", subtle));
+  section.append(heading);
+  return section;
+}
+
+function renderDetail(detail, assessment) {
+  const panel = elements.detailPanel;
+  panel.replaceChildren();
+  panel.append(node("p", "detail-kicker", "COMMIT / 提交身份"));
+  panel.append(node("h3", "detail-title", detail.title));
+  panel.append(node("span", "full-sha", detail.sha));
+  panel.append(node("div", "detail-date", `${dateLabel(detail.committed_at)} · ${detail.parent_shas.length} 个父提交`));
+
+  const priority = node("div", `priority-box ${assessment.priority}`);
+  priority.append(node("p", "priority-caption", "改动审查优先级（启发式）"));
+  const priorityRow = node("div", "priority-row");
+  priorityRow.append(node("span", "priority-label", priorityLabels[assessment.priority] || "需人工审查"));
+  priorityRow.append(node("span", "priority-code", assessment.priority));
+  priority.append(priorityRow, node("p", "priority-note", priorityNotes[assessment.priority] || priorityNotes.manual_review));
+  panel.append(priority);
+
+  const stats = appendSection("改动概览", "仅根据 Git 提交统计");
+  const grid = node("div", "metric-grid");
+  const metrics = [
+    [assessment.signals.changed_files, "变更文件"],
+    [assessment.signals.changed_lines ?? "—", "增删总行数"],
+    [detail.parent_shas.length, "父提交"],
+  ];
+  for (const [value, label] of metrics) {
+    const metric = node("div", "metric");
+    metric.append(node("span", "metric-value", value), node("span", "metric-label", label));
+    grid.append(metric);
+  }
+  stats.append(grid);
+  panel.append(stats);
+
+  const reasons = appendSection("判定依据", `${assessment.reasons.length} 条规则命中`);
+  if (assessment.reasons.length) {
+    const list = node("ul", "reason-list");
+    for (const reason of assessment.reasons) {
+      const item = node("li");
+      const dot = node("span", "reason-dot");
+      dot.setAttribute("aria-hidden", "true");
+      item.append(dot, node("span", "", reason.message));
+      list.append(item);
+    }
+    reasons.append(list);
+  } else reasons.append(node("p", "muted-line", "未命中额外优先规则；仍需正常人工审查。"));
+  panel.append(reasons);
+
+  const limits = appendSection("信息缺口", "未取得 ≠ 检查失败");
+  const limitList = node("ul", "limitation-list");
+  for (const code of assessment.limitations) {
+    const item = node("li");
+    const dot = node("span", "limit-dot", "○");
+    dot.setAttribute("aria-hidden", "true");
+    item.append(dot, node("span", "", limitationLabels[code] || code));
+    limitList.append(item);
+  }
+  limits.append(limitList);
+  if (detail.stats_unavailable_reason) limits.append(node("p", "muted-line", `统计不可用：${limitationLabels[detail.stats_unavailable_reason] || detail.stats_unavailable_reason}`));
+  panel.append(limits);
+
+  const files = appendSection("变更文件", `${detail.files.length} 个文件`);
+  if (detail.files.length) {
+    const list = node("ul", "file-list");
+    for (const file of detail.files) {
+      const item = node("li", "file-row");
+      const paths = node("span", "file-paths", file.path);
+      if (file.previous_path) paths.append(node("span", "file-previous", `原路径：${file.previous_path}`));
+      const stat = node("span", "file-stat");
+      stat.append(node("span", "stat-add", file.additions === null ? "+—" : `+${file.additions}`));
+      stat.append(document.createTextNode(" / "));
+      stat.append(node("span", "stat-del", file.deletions === null ? "−—" : `−${file.deletions}`));
+      item.append(node("span", "file-type", fileTypeLabels[file.change_type] || "?"), paths, stat);
+      list.append(item);
+    }
+    files.append(list);
+  } else files.append(node("p", "muted-line", assessment.priority === "manual_review" ? "当前提交的文件统计不可用于机械判断。" : "没有可显示的文件变更。"));
+  panel.append(files, node("div", "rule-version", `规则版本 · ${assessment.rule_version}`));
+}
+
+async function selectCommit(sha) {
+  if (!state.repoId || !state.anchorSha || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) return;
+  sha = sha.toLowerCase();
+  if (state.detailController) state.detailController.abort();
+  const controller = new AbortController();
+  state.detailController = controller;
+  state.detailEpoch += 1;
+  const detailEpoch = state.detailEpoch;
+  const epoch = state.epoch;
+  const repoId = state.repoId;
+  const anchorSha = state.anchorSha;
+  state.selectedSha = sha;
+  updateUrl(repoId, sha);
+  renderCommits();
+  showDetailPlaceholder("正在读取提交", `正在分析 ${shortSha(sha)} 的改动统计…`);
+  const path = `/api/repositories/${encodeURIComponent(repoId)}/commits/${encodeURIComponent(sha)}?anchor=${encodeURIComponent(anchorSha)}`;
+  try {
+    const result = await requestJson(path, controller);
+    if (epoch !== state.epoch || detailEpoch !== state.detailEpoch || repoId !== state.repoId || sha !== state.selectedSha) return;
+    if (result.repo_id !== repoId || result.anchor_sha !== anchorSha || result.detail.sha !== sha || result.assessment.sha !== sha) {
+      throw new Error("审查身份不匹配");
+    }
+    if (!state.commits.some((item) => item.sha === sha)) {
+      state.pinnedCommit = {
+        sha: result.detail.sha, title: result.detail.title,
+        committed_at: result.detail.committed_at, parent_count: result.detail.parent_shas.length,
+      };
+      renderCommits();
+    }
+    renderDetail(result.detail, result.assessment);
+  } catch (error) {
+    if (epoch !== state.epoch || detailEpoch !== state.detailEpoch || controller.signal.aborted && error.code !== "timeout") return;
+    showDetailError(errorMessage(error, "提交详情读取"));
+  }
+}
+
+async function initialize() {
+  const params = new URL(window.location.href).searchParams;
+  const requestedRepo = params.get("repo");
+  const requestedSha = params.get("sha");
+  try {
+    const repositories = await requestJson("/api/repositories", new AbortController());
+    if (!Array.isArray(repositories)) throw new Error("仓库列表格式不正确");
+    state.repositories = repositories;
+    renderRepositories();
+    setStatus(elements.dashboardStatus, repositories.length ? "" : "本次启动没有登记仓库。", false);
+    if (!repositories.length) {
+      setStatus(elements.commitStatus, "没有可浏览的仓库。");
+      return;
+    }
+    const selected = repositories.find((item) => item.id === requestedRepo) || repositories[0];
+    await selectRepository(selected.id, selected.id === requestedRepo ? requestedSha : null);
+  } catch (error) {
+    setStatus(elements.dashboardStatus, errorMessage(error, "仓库列表读取"), true);
+    setStatus(elements.commitStatus, "仓库列表不可用。", true);
+  }
+}
+
+elements.refreshList.addEventListener("click", () => { if (state.repoId) void selectRepository(state.repoId); });
+elements.refreshHead.addEventListener("click", () => { if (state.repoId) void selectRepository(state.repoId); });
+elements.loadMore.addEventListener("click", () => { if (state.nextCursor) void loadPage(state.nextCursor, state.epoch); });
+void initialize();
