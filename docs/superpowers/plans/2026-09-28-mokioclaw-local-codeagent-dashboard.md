@@ -104,10 +104,12 @@
 
 **Interfaces:** `TaskFilesystem(prepared: PreparedTask, source_read_scope, source_write_scope, task_scratch_scope)` 为宿主读、写、新建、重命名、删除和递归遍历提供逐次授权操作；`collect_patch(prepared: PreparedTask) -> PatchSummary` 只比较 baseline/work 普通文件，超限或不安全返回 `patch_unavailable`。
 
-- [ ] 写失败测试：绝对路径、`..`、其它 task/baseline/来源目录、symlink／junction／reparse、命令后目录替换为链接、rename 的源或目标越界、delete 与递归 search 越界均拒绝；无法避免检查到打开之间替换竞态时 fail closed；scratch 数据不进入补丁；新增 symlink、越界变更、5,000 文件／128 MiB 总量／8 MiB 单文件触发不可用而不读半截补丁。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行两个目标测试，确认失败。
+  - [x] 写失败测试：绝对路径、`..`、其它 task/baseline/来源目录、symlink／junction／reparse、命令后目录替换为链接、rename 的源或目标越界、delete 与递归 search 越界均拒绝；无法避免检查到打开之间替换竞态时 fail closed；scratch 数据不进入补丁；新增 symlink、越界变更、5,000 文件／128 MiB 总量／8 MiB 单文件触发不可用而不读半截补丁。
+  - [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行两个目标测试，确认失败。
 - [ ] 用 `apply_patch` 实现三种 scope 的统一路径检查与安全文件访问、work 软上限扫描和 baseline/work 补丁收集；完整补丁只放受限 task-root 产物目录，不设下载 API。
-- [ ] 新 `--basetemp` 重跑；人工审查 Windows 路径打开机制是否真正防重解析与竞态，无法保证的操作保持拒绝。
+  - [x] 新 `--basetemp` 重跑；人工审查 Windows 路径打开机制是否真正防重解析与竞态，无法保证的操作保持拒绝。
+
+  当前 Task 3B 为**部分完成**：Windows 已存在普通文件的读写使用拒绝删除共享的句柄、最终路径核验和逐组件检查；新建、重命名、删除与递归遍历在 Windows 仍 fail closed。补丁扫描仅供 worker／容器完全停止并确认清理后的可信收集阶段；不能把它当成与并发不受信任写入对抗的实时文件系统沙箱。Task 8B 之前须补齐安全操作或保持相应工具能力禁用，实际运行门继续关闭。
 
 ## Phase B3 — 假执行页面、受控执行与审批
 
