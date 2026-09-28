@@ -141,14 +141,16 @@
 
 ### Task 6: 单次命令审批网关
 
-**Files:** Create `src/mokioclaw/dashboard/task_approval.py`、`task_executor.py`；modify `src/mokioclaw/core/{state.py,approval.py}`、`src/mokioclaw/tools/bash_tool.py`、`src/mokioclaw/graph/architectures.py` 及其它直接验证执行点；test `tests/dashboard/test_task_approval.py`、`tests/tools/test_task_command_policy.py`。
+  **Files:** Create `src/mokioclaw/dashboard/task_approval.py`、`task_executor.py`；modify `src/mokioclaw/core/state.py` to reject task mode in legacy runtime；keep frozen `src/mokioclaw/tools/bash_tool.py` and `src/mokioclaw/graph/architectures.py` unchanged；test `tests/dashboard/test_task_approval.py`、`tests/test_task_command_policy.py`（沿用现有 flat tests 布局）。
 
 **Interfaces:** `TaskCommandGateway.run(workspace, command, timeout_seconds, max_output_chars) -> dict` 实现现有 `CommandExecutor` 协议；`ApprovalBroker.request(execution_request: ExecutionRequest) -> ApprovalDecision`。`ExecutionRequest` 不可变，规范摘要绑定 `task_id/attempt_id/command_request_id/command UTF-8 bytes/cwd/timeout/image digest/network=none/work-only mount/env allowlist/CPU-memory-PID-output limits/policy_version`；`approval_mode="task"` 只用于该网关，旧 `inline/deny/auto` 行为不变。
 
-- [ ] 写失败测试：所有 Bash 与 verifier 命令先待批；拒绝、审批恰逢超时、重复、跨任务／attempt、命令原始字节、cwd、timeout、image、network、mount、env、资源限制或策略版本任一变更均不执行；attempt 切换作废待决及未消费批准；一次批准只执行一次，两个外观相同但 `command_request_id` 不同的请求不能复用批准；正则未识别的命令仍待批；旧 CLI/TUI 审批测试仍通过。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 实现任务审批模式、`ExecutionRequest` 的规范摘要与有界等待；将 verifier 也接到同一网关，禁止 task 模式退回主机 `shell=True` 或 CLI `auto`。
-- [ ] 新 `--basetemp` 重跑，并针对旧 Bash/approval/graph 测试做回归。
+  - [x] 写失败测试：所有 Bash 与 verifier 命令先待批；拒绝、审批恰逢超时、重复、跨任务／attempt、命令原始字节、cwd、timeout、image、network、mount、env、资源限制或策略版本任一变更均不执行；attempt 切换作废待决及未消费批准；一次批准只执行一次，两个外观相同但 `command_request_id` 不同的请求不能复用批准；正则未识别的命令仍待批；旧 CLI/TUI 审批测试仍通过。
+  - [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+  - [x] 用 `apply_patch` 实现任务专属 Bash／verifier 包装器、`ExecutionRequest` 的规范摘要与有界等待；旧 `RuntimeState` 收到 `task` 模式立即拒绝，禁止退回主机 `shell=True` 或 CLI `auto`。
+  - [x] 新 `--basetemp` 重跑，并针对旧 Bash/approval/graph 测试做回归。
+
+  Task 6 只实现内部批准账本与命令网关；尚无真实命令执行器，也不把演示批准用作命令授权。网页展示确切命令、审批请求与决定路由须在真实工作流接入前完成，并在 Task 9 验收。Click 冻结预检要求上述旧工具与架构文件字节不变，Task 8B/8C 必须使用新任务包装器注入。
 
 ### Task 7: 受限容器与 worker 生命周期
 
@@ -188,18 +190,18 @@
 
 ### Task 8B: 宿主文件工具统一接入
 
-**Files:** Modify `src/mokioclaw/tools/{registry.py,grep_tool.py,file_tools.py}` 及 Notepad／Search 的实际注册点；test `tests/tools/test_task_scope.py`。
+**Files:** Create `src/mokioclaw/dashboard/task_tools.py` and task-specific Notepad／Search wrappers; modify only non-frozen registration points in `src/mokioclaw/agents/code_agent.py` and task adapter; test `tests/dashboard/test_task_scope.py`. Keep `src/mokioclaw/tools/*.py` byte-identical for frozen Click identity.
 
 **Interfaces:** Task 3B 的 `TaskFilesystem` 是 Web Task FileRead/FileWrite/FileEdit/Grep/Search/Notepad 和上下文枚举的唯一文件访问入口；普通 CLI/TUI 工具路径维持原行为。
 
 - [ ] 写失败测试：read/write/scratch 各只访问对应 scope；绝对路径、`..`、跨任务、baseline/来源、链接与 junction、rename/delete/递归 search 越界均拒绝；命令后把目录改成链接再调用宿主工具仍拒绝；旧工具测试不受影响。
 - [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 将所有 Web Task 文件工具接到同一 `TaskFilesystem`，修复 Grep 递归链接路径；无法可靠无竞态打开的操作 fail closed。
+  - [ ] 用 `apply_patch` 让 Web Task 使用单独任务工具注册表，全部文件操作接到同一 `TaskFilesystem`；旧 Grep 与工具文件保持原字节。无法可靠无竞态打开的操作 fail closed。
 - [ ] 新 `--basetemp` 重跑并逐项审阅工具注册表，确认不存在绕过入口。
 
 ### Task 8C: 图节点与命令网关注入
 
-**Files:** Modify `src/mokioclaw/graph/{nodes.py,architectures.py,workflow.py}`、`src/mokioclaw/agents/code_agent.py`、`src/mokioclaw/core/{state.py,approval.py}`；test `tests/dashboard/test_task_graph_injection.py`。
+**Files:** Create `src/mokioclaw/dashboard/task_graph.py`; modify `src/mokioclaw/graph/nodes.py`、`src/mokioclaw/agents/code_agent.py` and non-frozen core entrypoints as required; keep frozen `graph/architectures.py` and `graph/workflow.py` byte-identical; test `tests/dashboard/test_task_graph_injection.py`.
 
 **Interfaces:** `stream_agent_events(..., task_context: TaskRunContext | None = None)` 保持旧调用兼容；task_context 将 Task 8A 的模型工厂、Task 8B 的文件工具、Task 6 的 `TaskCommandGateway` 注入所有 planner/CodeAgent/verifier 节点。
 

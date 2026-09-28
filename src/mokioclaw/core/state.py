@@ -37,6 +37,8 @@ class RuntimeState:
     allow_web_search: bool = True
 
     def __post_init__(self) -> None:
+        if str(self.approval_mode).strip().lower() == "task":
+            raise ValueError("Task commands require the isolated task gateway wrappers")
         self.approval_mode = normalize_approval_mode(self.approval_mode)
         self.checkpoint_mode = normalize_checkpoint_mode(self.checkpoint_mode)
         self.trace_mode = normalize_trace_mode(self.trace_mode)

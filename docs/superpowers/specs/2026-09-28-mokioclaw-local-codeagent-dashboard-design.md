@@ -72,6 +72,8 @@
 
 所有 Agent shell 命令及 planner/verifier 提出的验证命令都经过同一个 `TaskCommandGateway`。网关构造不可变 `ExecutionRequest`：`task_id`、`attempt_id`、`command_request_id`、完整命令 UTF-8 字节、容器内 cwd、超时、镜像 digest、固定 `network=none`、仅 work 目录挂载策略、环境允许列表策略、CPU／内存／PID／输出限制及策略版本。命令字节在固定字段顺序的规范 JSON 中以标准 base64 表示，其余字段也使用固定类型与编码，整体取 SHA-256 `execution_digest`；用户批准的是此请求的一次性 digest，执行前重算完全一致才可运行。正则风险分类只作提示，绝不是安全放行条件；CLI `auto` 模式在网页任务中禁用。批准请求一旦因取消、超时、attempt 更替或终态失效，不能恢复或复用；两个看起来相同的命令也必须分别批准。用户指定的验证命令仍需在运行前作为任务策略确认；模型生成的新命令不得自动执行。
 
+现有 Click 冻结预检把 `src/mokioclaw/tools/*.py` 与 `graph/architectures.py`、`graph/workflow.py` 的当前字节纳入身份哈希。阶段 B 的网页任务因此通过独立 `dashboard/task_executor.py`、任务工具包装器与任务图适配层注入命令和文件能力，不修改这些冻结哈希文件，也不让 `approval_mode="task"` 的 `RuntimeState` 进入旧 Bash 实现。真实任务路径必须在测试中证明 Bash 与 verifier 均使用任务网关；旧 CLI/TUI 的原有入口与冻结预检保留。
+
 执行器只把 work 目录挂入受限容器；不挂载来源仓库、baseline、用户主目录、Docker socket 或 provider 凭据。默认 `--network none`、非特权用户、只读根文件系统、资源与输出上限、无后台命令、超时后强制清理容器。镜像以固定 digest 选择并记录。现有评测 `DockerCommandExecutor` 可以参考参数，但必须经本阶段独立审计与测试；Docker 不可用或边界不达标时，任务可预览而不能运行。worker 是受信任的本机进程，不宣称能抵御其自身被攻陷；本阶段的隔离主张限定为模型可调用的工具与命令不能访问来源树或宿主私有路径。
 
 Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全。Web Task 定义三种互不混淆的 scope：`source_read_scope` 是 work 内已准备源码可读取的文件／目录前缀；`source_write_scope` 是 work 内允许修改、创建、重命名目标和删除的范围，第一版与 read scope 相同；`task_scratch_scope` 固定为 work 内 `.mokioclaw/task-scratch/`，只放 notepad／临时 Agent 数据，不进入源码补丁。baseline、来源仓库、其它 Task 根目录都不属于任何 scope。将来若支持不同的读写范围须先修订契约。
