@@ -1,7 +1,7 @@
 # MokioClaw 本地工作台 CodeAgent 接入设计（阶段 B）
 
 > 日期：2026-09-28（Asia/Shanghai）
-> 状态：正式设计草案，待用户审阅；本文件不授权实施、provider 调用或真实 Agent 运行
+> 状态：用户于 2026-09-28 指示按本设计逐步实施；provider 调用与真实 Agent 试点仍需单独授权
 > 前置基线：`2026-09-26-mokioclaw-local-repository-review-dashboard-design.md` 与本地工作台 V1
 > 目标：固定提交 → 独立任务副本 → 受控 CodeAgent 工作流 → 人工审阅补丁与验证证据
 
@@ -102,7 +102,7 @@ Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全�
 
 预览过期或源码范围在准备前变化时要求重做预览。base 不可达、Git 缺对象、含不支持路径、任务根落在来源仓库内、Docker 不可用、provider 未配置、审批超时或拒绝、worker 崩溃、容器超时、输出过大、`workspace_limit_exceeded`、`patch_unavailable`、补丁含 symlink／秘密疑似内容，都保留明确类别并禁止自动升级到下一动作。准备失败必须清理或隔离未发布的临时副本；不能把部分副本标为 `prepared`。执行资源清理失败保持 `cleanup_failed`，阻止新运行并保留归属标识供 reconcile；不提前发布 `cancelled` 等终态。脱敏器无法确定是否安全时隐藏该字段，不输出原文。关闭浏览器不取消已运行任务，但也不批准等待中的命令；等待达到期限后默认拒绝。
 
-验收分四级：
+验收分五级：
 
 1. **契约级**：假执行器与临时 Git 仓库证明异步创建立即返回、状态机、幂等、active task 的 `409 task_busy`、跨仓库隔离、CSRF／Origin、attempt 与迟到事件、错误结构和 V1 API 不变。
 2. **隔离级**：恶意路径、symlink／junction／reparse、命令后链接替换、rename/delete/递归搜索、跨任务与 baseline 越界、Git 配置、环境变量、磁盘软上限、网络参数、命令逃逸、容器超时与取消的假执行测试；来源 refs/index/工作树和 ignored 夹具字节前后相同。取消／超时／崩溃与完成竞态、残留容器、重启 reconcile、`cleanup_failed` 和终态后 work 不再由 Agent 改动都须覆盖。
@@ -123,4 +123,4 @@ Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全�
 | B4 完整 CodeAgent 接入 | 显式 provider 注入、`TaskFilesystem` 全工具约束、完整工作流、脱敏投影、结果页 | 无 provider 假模型测试与全项目回归通过；真实按钮仍受能力门控制。 |
 | B5 真实试点验收 | 用户另行批准的有限运行与审阅记录 | B3.5 与 B4 均通过且明确授权后启动，不构成旧评测补跑或自动写回。 |
 
-本设计和实施计划只授权文档审阅。阶段 B 代码实施、Docker 执行、provider 调用、真实 Agent 任务、commit、push、远端修改和发布，仍分别遵守用户后续指令。本设计获确认后，如实现中改变隔离、数据范围或审批语义，应先更新本文件与实施计划。
+用户已授权按本设计逐步实施阶段 B 代码，并要求先提交、推送既有改动。真实 Docker 隔离验收、provider 调用、真实 Agent 任务、后续远端修改和发布仍分别遵守独立权限门。如实现中改变隔离、数据范围或审批语义，应先更新本文件与实施计划。

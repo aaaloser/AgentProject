@@ -27,13 +27,13 @@
 - work 的软上限为 5,000 个普通文件、总量 128 MiB、单文件 8 MiB；在命令前后和运行中周期检查。CPU／内存／PID 限制不提供宿主 bind mount 的磁盘硬配额。
 - `--task-root` 中的 baseline/work/完整补丁不自动删除，可能含私有源码；启动者避开同步盘和公开目录，Web 不提供原始补丁下载。
 - 任务结果 API 只返回白名单、限长、脱敏摘要；不返回原始 prompt/response、凭据、完整 endpoint/query、headers、payload、完整 stdout/stderr 或完整补丁。
-- 实施代码的授权、Docker 执行、真实 provider/Agent 试点、commit、push、远端修改分别需要用户后续指令。本计划本身只供审阅；本轮不执行步骤。
+- 用户已于 2026-09-28 授权按本计划逐步实施代码，并授权先提交、推送此前的既有改动。真实 Docker 验收、真实 provider/Agent 试点、后续远端修改与发布仍须分别满足设计中的权限门。
 - 将来运行 pytest 时指定 `D:\envs\codeagent\Scripts\python.exe`，显式设置 `PYTHONPATH=src`，每次用新 GUID 的独立 `--basetemp`。测试只使用临时仓库和假 provider，除非用户另外批准真实试点。
 
 ## Review Focus
 
 1. **页面切换仓库或历史锚后提交旧预览**：创建应因 repo/base/anchor/范围摘要不一致而拒绝；Task 2、Task 4 测试。
-2. **大小写冲突、symlink、gitlink、LFS 与秘密文件混入范围**：预览明确列出阻断项，准备不读取其 blob；Task 2、Task 3 测试。
+2. **大小写冲突、symlink、gitlink、LFS 与秘密文件混入范围**：预览明确列出阻断项，准备不读取其 blob；Task 2、Task 3A 测试。
 3. **verifier 绕过 Bash 审批，或批准一条命令后执行另一条**：统一网关绑定命令与策略版本，单次使用；Task 6 测试。
 4. **取消／完成竞态与重启后的残留容器**：按身份清理全部归属资源后才发布终态；不确定时 `cleanup_failed`，迟到事件和审批无效；Task 1、Task 7 测试。
 5. **命令更换链接、越界搜索或私有文本进入结果**：每次宿主文件访问重新检查 scope 和 reparse point，投影失败时隐藏字段；Task 3B、Task 5、Task 8B 测试。
@@ -69,10 +69,10 @@
 
 **Interfaces:** `TaskSpec` 精确包含 `task_id/repo_id/base_sha/anchor_sha/description/source_read_scope/source_write_scope/task_scratch_scope/manifest_digest/max_seconds/max_attempts/verification_commands/max_provider_calls/max_total_tokens/max_output_tokens_per_call/created_at`；`TaskRecord` 包含状态、当前 `attempt_id`、全任务单调 `sequence`、`failure_kind`、`verification_status` 及归属资源身份；`PublicTaskEvent` 在 `task_models.py` 定义，Task 5 实现投影。`TaskStore.create(spec, idempotency_key) -> TaskRecord`、`transition(task_id, expected, target, update) -> TaskRecord`、`record_event(task_id, attempt_id, event) -> PublicTaskEvent`。`TaskWorkerController.reconcile()` 在 Task 7 提供；重启不能由 store 单独宣布 `interrupted`。
 
-- [ ] 写失败测试：同幂等键同规范请求只创建一次、同键异请求拒绝；重复运行、非法跳转、终态迟到事件、旧 attempt 事件和序号倒退均拒绝；`cleanup_failed` 非终态并阻止新运行；store 重启不抢先宣布 `interrupted` 或重放审批。
-- [ ] 用指定 Python、`PYTHONPATH=src`、独立 `--basetemp` 运行 `tests/dashboard/test_task_store.py`，确认因接口不存在而失败。
-- [ ] 用 `apply_patch` 实现原子写入／替换与单调序号；任务 ID 随机，磁盘 JSON 不含任务描述、源码、命令输出或 provider 设置。敏感描述仅存受限任务内存，重启后不能自动续跑。
-- [ ] 使用新 `--basetemp` 重跑同一测试，确认通过；审阅磁盘元数据字段。
+- [x] 写失败测试：同幂等键同规范请求只创建一次、同键异请求拒绝；重复运行、非法跳转、终态迟到事件、旧 attempt 事件和序号倒退均拒绝；`cleanup_failed` 非终态并阻止新运行；store 重启不抢先宣布 `interrupted` 或重放审批。
+- [x] 用指定 Python、`PYTHONPATH=src`、独立 `--basetemp` 运行 `tests/dashboard/test_task_store.py`，确认因接口不存在而失败。
+- [x] 用 `apply_patch` 实现原子写入／替换与单调序号；任务 ID 随机，磁盘 JSON 不含任务描述、源码、命令输出或 provider 设置。敏感描述仅存受限任务内存，重启后不能自动续跑。
+- [x] 使用新 `--basetemp` 重跑同一测试，确认通过；审阅磁盘元数据字段。
 
 ### Task 2: 固定提交树预览与范围身份
 
@@ -238,4 +238,4 @@
 
 ## Execution Handoff
 
-本计划是待审阅的实施文件，不因写成而授权执行。建议先按 B1→B3→B3.5→B4 顺序实施并逐阶段验收；B3.5 必须获得单独 Docker 测试授权，B5 保持独立真实 provider 授权门。接口和隔离策略存在前后依赖，实施时逐任务核对测试与失败门；用户确认设计、计划及执行方式后再开始。当前仓库改动继续保持未提交，任何 commit 或远端动作仍须用户单独指令。
+本计划已获用户指示逐步实施。按 B1→B3→B3.5→B4 顺序逐任务验收；B3.5 必须获得单独 Docker 测试授权，B5 保持独立真实 provider 授权门。接口和隔离策略存在前后依赖，实施时逐任务核对测试与失败门。初始既有改动已单独提交并推送；后续远端动作仍须用户单独指令。

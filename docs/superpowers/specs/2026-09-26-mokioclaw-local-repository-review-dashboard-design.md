@@ -235,7 +235,7 @@ API 仅向同源页面提供读取：
 
 未来从提交或 Issue 手动创建维护任务时，读取来源仓库的固定 SHA，准备隔离工作空间，运行 Agent、公开验证、补丁捕获与人工审查。Agent 输出与 V1 历史提交优先级是两个独立对象；不能把审查优先级当成 Agent 任务成功率。任何新真实运行、provider 调用、回写本地仓库或创建 PR 都需要相应用户授权。旧 Rich/Click 正式槽位永不补跑。
 
-2026-09-28 更新：本地 CodeAgent 接入已单独起草于 `2026-09-28-mokioclaw-local-codeagent-dashboard-design.md`，配套实施计划为 `../plans/2026-09-28-mokioclaw-local-codeagent-dashboard.md`。这两份文件待用户审阅；本 V1 只读工作台的范围和规则不因此改变。
+2026-09-28 更新：本地 CodeAgent 接入设计位于 `2026-09-28-mokioclaw-local-codeagent-dashboard-design.md`，配套实施计划为 `../plans/2026-09-28-mokioclaw-local-codeagent-dashboard.md`。用户已指示按该计划逐步实施；本 V1 只读工作台的范围和规则不因此改变。
 
 ## 16. 本阶段完成定义与非主张
 
