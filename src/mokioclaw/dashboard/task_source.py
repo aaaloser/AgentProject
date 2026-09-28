@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 import secrets
 import time
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ class TaskPreview:
     source_read_scope: tuple[str, ...]
     source_write_scope: tuple[str, ...]
     task_scratch_scope: str
+    source_identity: tuple[int, int, int, int]
     request_digest: str
     manifest_digest: str
     files: tuple[ManifestEntry, ...]
@@ -101,6 +103,16 @@ def _excluded(path: str) -> bool:
     )
 
 
+def source_identity(root: Path) -> tuple[int, int, int, int]:
+    """Identify the registered root and its Git metadata without reading source files."""
+    try:
+        root_stat = root.stat()
+        git_stat = (root / ".git").lstat()
+    except OSError as exc:
+        raise InvalidTaskPreview("Repository identity is unavailable") from exc
+    return (root_stat.st_dev, root_stat.st_ino, git_stat.st_dev, git_stat.st_ino)
+
+
 class TaskSource:
     def __init__(self, catalog: RepositoryCatalog, reader: LocalGitReader, *, clock: Callable[[], float] | None = None) -> None:
         self.catalog = catalog
@@ -118,6 +130,7 @@ class TaskSource:
             current = self.reader.inspect(root)
             if current.root != repository.root or current.object_format != repository.state.object_format:
                 raise InvalidTaskPreview("Repository identity changed")
+            identity = source_identity(root)
             self.reader._validate_sha(root, base_sha)
             self.reader._validate_sha(root, anchor_sha)
             reachable, _ = self.reader._run(root, "merge-base", "--is-ancestor", base_sha, anchor_sha)
@@ -192,6 +205,7 @@ class TaskSource:
             source_read_scope=scope,
             source_write_scope=scope,
             task_scratch_scope=".mokioclaw/task-scratch/",
+            source_identity=identity,
             request_digest=request_digest,
             manifest_digest=digest,
             files=tuple(files),

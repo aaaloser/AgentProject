@@ -91,12 +91,12 @@
 
 **Files:** Create `src/mokioclaw/dashboard/task_copy.py`；test `tests/dashboard/test_task_copy.py`。
 
-**Interfaces:** `prepare_task(preview: TaskPreview, task_root: Path, catalog: RepositoryCatalog, reader: LocalGitReader) -> PreparedTask` 从受信任 catalog 重新定位并核验 `repo_id` 的来源根，仅从预览的 `base_sha/manifest_digest` 所指普通 blob 建立不可变 `baseline/` 和可写 `work/`；准备完复算清单。`task_root` 位于所有来源仓库、`.git` 和冻结证据路径之外。
+**Interfaces:** `prepare_task(preview: TaskPreview, task_id: str, task_root: Path, catalog: RepositoryCatalog, reader: LocalGitReader) -> PreparedTask` 使用 TaskStore 生成的不透明任务 ID，从受信任 catalog 重新定位并核验 `repo_id` 的来源根，仅从预览的 `base_sha/manifest_digest` 所指普通 blob 建立不可变 `baseline/` 和可写 `work/`；准备完复算清单。`task_root` 位于所有来源仓库、`.git` 和冻结证据路径之外。
 
-- [ ] 写失败测试：task-root 越界；symlink、gitlink、LFS、大小写冲突、路径穿越、单文件及总量超限；预览 A 后 HEAD 变 B 仍复制 A，准备完成后 HEAD 再移动也不改变副本；来源移动、仓库身份替换、对象缺失或清单变更时失败且无可运行副本。双临时仓库的 HEAD、refs、index、status 和 ignored 夹具字节前后相同。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 实现来源根身份复核、blob ID 定址读取、安全文件落盘、准备完成后原子发布；准备失败清理或隔离临时副本，绝不发布 `prepared`。
-- [ ] 新 `--basetemp` 重跑并核对失败准备无残留可运行状态。
+- [x] 写失败测试：task-root 越界，symlink／LFS 阻断预览不得准备，任务目录 junction 逃逸拒绝；Task 2 已覆盖 gitlink、大小写冲突、路径穿越和初始大小限制；预览 A 后 HEAD 变 B 仍复制 A，准备完成后 HEAD 再移动也不改变副本；来源移动、仓库身份替换、对象缺失或清单变更时失败且无可运行副本。双临时仓库的 HEAD、refs、index、status 和 ignored 夹具字节前后相同。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+- [x] 用 `apply_patch` 实现来源根身份复核、blob ID 定址读取、安全文件落盘、准备完成后原子发布；准备失败清理或隔离临时副本，绝不发布 `prepared`。
+- [x] 新 `--basetemp` 重跑并核对失败准备无残留可运行状态。
 
 ### Task 3B: 统一任务文件边界与补丁收集
 
