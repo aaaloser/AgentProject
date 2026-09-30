@@ -9,6 +9,8 @@
 ```powershell
 uv sync --locked
 uv run mokioclaw dashboard --repo "D:\path\to\repo-one" --repo "D:\path\to\repo-two"
+
+uv run mokioclaw dashboard --repo "D:\agent work\project\SuperMew" --repo "D:\agent work\project\MokioAgent"
 ```
 
 路径可重复传入；同一 Git 顶层目录的别名只显示一次。未传 `--repo` 时默认使用当前目录。如果你想手动打开浏览器：
