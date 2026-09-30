@@ -19,6 +19,7 @@ docs/*
 !docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md
 !docs/MOKIOCLAW_NEXT_SESSION_HANDOFF_2026-09-28.md
 !docs/MOKIOCLAW_NEXT_SESSION_HANDOFF_2026-09-29.md
+!docs/MOKIOCLAW_CURRENT_BOTTLENECKS_2026-09-30.md
 !docs/task10_grep_symlink_candidate.patch
 !docs/superpowers/
 docs/superpowers/*
