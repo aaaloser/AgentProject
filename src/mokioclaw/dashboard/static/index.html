@@ -99,16 +99,19 @@
           <p class="panel-index">04 / LOCAL TASK</p>
           <h2 id="task-heading">固定提交任务</h2>
         </div>
-        <span class="task-gate">真实 Agent 未启用</span>
+        <span id="task-gate" class="task-gate">真实 Agent 未启用</span>
       </div>
-      <p class="task-explain">在独立副本中预览和准备任务。状态演示 / 无 provider，不执行命令或验证，不代表修复成功。</p>
-      <p id="task-selection" class="task-selection" aria-live="polite">先选择仓库和提交。</p>
+      <p id="task-explain" class="task-explain">在独立副本中预览和准备任务。状态演示 / 无 provider，不执行命令或验证，不代表修复成功。</p>
+      <div id="task-selection" class="task-selection" aria-live="polite">先选择仓库和提交。</div>
       <div class="task-form">
         <label>允许读取的相对路径（每行一项；目录以 / 结尾）
           <textarea id="task-scope" rows="3" maxlength="4000" placeholder="src/"></textarea>
         </label>
         <label>任务说明
           <textarea id="task-description" rows="3" maxlength="4000" placeholder="说明希望在固定提交副本中完成的维护工作"></textarea>
+        </label>
+        <label>固定验证命令（每行一条，最多 10 条；每条执行前单独审批）
+          <textarea id="task-verification-commands" rows="3" maxlength="4000" placeholder="python -m pytest -q"></textarea>
         </label>
         <div class="task-limits">
           <label>最长秒数<input id="task-max-seconds" type="number" min="1" max="1800" value="300"></label>
@@ -122,17 +125,22 @@
           <button type="button" id="task-create" disabled>准备隔离副本</button>
           <button type="button" id="task-demo-run" disabled>状态演示 / 无 provider</button>
           <button type="button" id="task-demo-cancel" disabled>停止演示</button>
+          <button type="button" id="task-run" disabled>核对清单并运行 Agent</button>
+          <button type="button" id="task-cancel" disabled>停止 Agent 任务</button>
         </div>
       </div>
       <p id="task-status" class="status-message" role="status" aria-live="polite"></p>
       <div id="task-preview-result" class="task-result" aria-live="polite"></div>
       <div id="task-summary" class="task-result" aria-live="polite"></div>
+      <div id="task-run-policy" class="task-result" aria-live="polite"></div>
+      <div id="task-approvals" class="task-result" aria-live="polite"></div>
+      <div id="task-final-result" class="task-result" aria-live="polite"></div>
       <ol id="task-events" class="task-events" aria-label="任务状态记录"></ol>
     </section>
 
     <footer class="site-footer">
       <span>MokioClaw / LOCAL REVIEW</span>
-      <span>来源仓库只读 · 状态演示不运行代码或测试</span>
+      <span>来源仓库只读 · Agent 仅操作隔离副本并逐条审批命令</span>
     </footer>
   </div>
 </body>

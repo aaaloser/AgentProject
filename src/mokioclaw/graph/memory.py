@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from mokioclaw.core.state import RuntimeState
+from mokioclaw.dashboard.task_filesystem import TaskFilesystemError
 from mokioclaw.tools.file_tools import read_text_lossy
 from mokioclaw.tools.notepad_tool import NOTEPAD_FILE, read_notepad
 
@@ -38,7 +39,7 @@ MAX_TEXT_CHARS = {
 
 def build_layered_memory(state: dict[str, Any], *, node: str = "graph") -> dict[str, Any]:
     runtime = state["runtime"]
-    notepad = read_notepad(runtime)
+    notepad = _read_task_memory(runtime, ".mokioclaw/task-scratch/NOTEPAD.md") if runtime.task_filesystem else read_notepad(runtime)
     history = read_history_summary(runtime)
     sources = [
         {
@@ -112,6 +113,8 @@ def memory_event(memory: dict[str, Any], *, node: str) -> dict[str, Any]:
 
 
 def read_history_summary(state: RuntimeState) -> dict[str, Any]:
+    if state.task_filesystem is not None:
+        return _read_task_memory(state, ".mokioclaw/task-scratch/HISTORY_SUMMARY.md")
     path = state.assert_workspace_path(state.workspace / HISTORY_SUMMARY_FILE)
     if not path.exists():
         return {"ok": True, "path": HISTORY_SUMMARY_FILE, "content": "", "exists": False}
@@ -121,6 +124,13 @@ def read_history_summary(state: RuntimeState) -> dict[str, Any]:
 
 
 def persist_history_summary(state: RuntimeState, summary: str) -> dict[str, Any]:
+    if state.task_filesystem is not None:
+        path = ".mokioclaw/task-scratch/HISTORY_SUMMARY.md"
+        try:
+            state.task_filesystem.write_bytes(path, summary.encode("utf-8"), scratch=True)
+            return {"ok": True, "path": path, "lines": len(summary.splitlines())}
+        except (TaskFilesystemError, OSError, UnicodeError):
+            return {"ok": False, "error": "task_file_access_denied"}
     path = state.assert_workspace_path(state.workspace / HISTORY_SUMMARY_FILE)
     path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -128,6 +138,15 @@ def persist_history_summary(state: RuntimeState, summary: str) -> dict[str, Any]
     path.write_text(content, encoding="utf-8")
     state.record_read(path, complete=True)
     return {"ok": True, "path": HISTORY_SUMMARY_FILE, "lines": len(content.splitlines())}
+
+
+def _read_task_memory(state: RuntimeState, path: str) -> dict[str, Any]:
+    assert state.task_filesystem is not None
+    try:
+        content = state.task_filesystem.read_bytes(path, scratch=True).decode("utf-8", errors="replace")
+        return {"ok": True, "path": path, "content": content, "exists": True}
+    except (TaskFilesystemError, OSError):
+        return {"ok": False, "path": path, "content": "", "exists": False}
 
 
 def _event_layer_summary(layer: dict[str, Any]) -> str:

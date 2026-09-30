@@ -167,6 +167,13 @@ h1 span { color: var(--blue); }
 .task-result { color: #52657a; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .task-result p { margin: 7px 0; }
 .task-warning { color: #99512c; }
+.task-result h3 { margin: 14px 0 6px; color: var(--ink); font-size: 14px; }
+.task-result h4 { margin: 12px 0 5px; color: var(--ink); font-size: 12px; }
+.task-result ul, .task-result ol { margin: 6px 0; padding-left: 20px; }
+.task-approval { margin: 12px 0; padding: 12px; border: 1px solid #d9e2eb; border-radius: 7px; background: #f8fbff; }
+.task-approval pre { margin: 7px 0; padding: 9px; overflow-x: auto; white-space: pre-wrap; background: #fff; border: 1px solid #e2e8ef; }
+.task-approval button { margin: 5px 8px 0 0; padding: 7px 10px; border: 1px solid #c8d8f4; border-radius: 6px; background: #eff4ff; color: #284ca4; cursor: pointer; }
+.task-approval button:disabled { opacity: .5; cursor: default; }
 .task-events { max-height: 230px; margin: 10px 0 0; padding: 0 0 0 20px; overflow: auto; color: #64788e; font-size: 11px; line-height: 1.8; }
 
 @media (max-width: 1120px) {

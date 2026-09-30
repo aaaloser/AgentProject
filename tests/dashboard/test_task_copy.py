@@ -78,6 +78,10 @@ def test_prepare_copies_only_fixed_sha_without_changing_source(temp_git_repo: Pa
     assert prepared.manifest_digest == preview.manifest_digest
     assert (prepared.baseline / "src" / "a.py").read_bytes() == b"base\n"
     assert (prepared.work / "src" / "a.py").read_bytes() == b"base\n"
+    scratch = prepared.work / ".mokioclaw" / "task-scratch"
+    assert (scratch / "NOTEPAD.md").read_bytes() == b""
+    assert (scratch / "HISTORY_SUMMARY.md").read_bytes() == b""
+    assert not (prepared.baseline / ".mokioclaw").exists()
     assert not (prepared.work / "private.fixture").exists()
     assert _snapshot(temp_git_repo) == before
     assert _snapshot(other) == other_before

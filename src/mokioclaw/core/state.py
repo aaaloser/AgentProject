@@ -10,6 +10,7 @@ from mokioclaw.core.trace import normalize_trace_mode
 
 if TYPE_CHECKING:
     from mokioclaw.core.execution import CommandExecutor
+    from mokioclaw.dashboard.task_filesystem import TaskFilesystem
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class RuntimeState:
     trace_id: str | None = None
     command_executor: CommandExecutor | None = None
     allow_web_search: bool = True
+    task_filesystem: TaskFilesystem | None = None
 
     def __post_init__(self) -> None:
         if str(self.approval_mode).strip().lower() == "task":

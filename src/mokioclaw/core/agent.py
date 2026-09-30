@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from dotenv import load_dotenv
 from langgraph.graph import add_messages
@@ -23,6 +24,173 @@ from mokioclaw.core.session import (
 from mokioclaw.core.state import RuntimeState
 from mokioclaw.core.trace import TraceRecorder, normalize_trace_mode
 from mokioclaw.graph.workflow import build_complex_workflow, build_entry_workflow
+from mokioclaw.dashboard.task_executor import TaskExecutionError
+from mokioclaw.providers.openai_provider import (
+    ProviderSettings, TaskProviderError, create_task_model, task_provider_failure_kind,
+)
+
+
+_TASK_MODEL_STAGES = (
+    "entry", "chat", "planner", "code_agent", "verifier", "context_compressor",
+)
+
+
+class _TaskModel:
+    def __init__(self, underlying: Any, context: TaskRunContext, stage: str) -> None:
+        self._underlying = underlying
+        self._context = context
+        self._stage = stage
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> _TaskModel:
+        try:
+            return _TaskModel(self._underlying.bind_tools(tools, **kwargs), self._context, self._stage)
+        except Exception:
+            raise TaskProviderError("provider_setup_failed") from None
+
+    def invoke(self, messages: Any, **kwargs: Any) -> Any:
+        context = self._context
+        with context._lock:
+            if context._usage_unavailable:
+                raise TaskProviderError("usage_unavailable")
+            if (context.provider_calls >= context.max_provider_calls
+                    or context.reported_tokens >= context.max_total_tokens):
+                raise TaskProviderError("provider_budget_exhausted")
+            context.provider_calls += 1
+            context._stage_calls[self._stage] += 1
+            try:
+                response = self._underlying.invoke(messages, **kwargs)
+            except Exception as exc:
+                raise TaskProviderError(task_provider_failure_kind(exc)) from None
+            usage = getattr(response, "usage_metadata", None)
+            total = usage.get("total_tokens") if isinstance(usage, dict) else None
+            if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+                context._usage_unavailable = True
+            else:
+                context.reported_tokens += total
+                context._stage_tokens[self._stage] += total
+            return response
+
+
+class TaskRunContext:
+    """Explicit task model and shared attempt-spanning provider budget."""
+
+    allow_web_search = False
+    trace_mode = "off"
+    checkpoint_mode = "off"
+
+    def __init__(
+        self,
+        model_factory: Callable[[], Any],
+        *,
+        max_provider_calls: int,
+        max_total_tokens: int,
+        max_output_tokens_per_call: int,
+    ) -> None:
+        if (not 1 <= max_provider_calls <= 20 or not 1 <= max_total_tokens <= 100_000
+                or not 1 <= max_output_tokens_per_call <= 4096):
+            raise TaskProviderError("invalid_provider_budget")
+        self._model_factory = model_factory
+        self._model: Any | None = None
+        self._lock = threading.RLock()
+        self._usage_unavailable = False
+        self.max_provider_calls = max_provider_calls
+        self.max_total_tokens = max_total_tokens
+        self.max_output_tokens_per_call = max_output_tokens_per_call
+        self.provider_calls = 0
+        self.reported_tokens = 0
+        self._stage_calls = dict.fromkeys(_TASK_MODEL_STAGES, 0)
+        self._stage_tokens = dict.fromkeys(_TASK_MODEL_STAGES, 0)
+        self.task_filesystem: Any | None = None
+        self.task_tools: list[Any] | None = None
+        self.task_gateway: Any | None = None
+        self.current_attempt = 1
+        self.fixed_verification_commands: tuple[str, ...] = ()
+
+    def attach_tools(
+        self, filesystem: Any, tools: list[Any], *, gateway: Any | None = None,
+        verification_commands: tuple[str, ...] = (),
+    ) -> None:
+        if self.task_filesystem is not None or not tools:
+            raise ValueError("task_tools_already_configured")
+        if any(not isinstance(command, str) or not command.strip() for command in verification_commands):
+            raise ValueError("task_verification_invalid")
+        self.task_filesystem = filesystem
+        self.task_tools = list(tools)
+        self.task_gateway = gateway
+        self.fixed_verification_commands = tuple(verification_commands)
+
+    def begin_attempt(self, attempt_id: int) -> None:
+        with self._lock:
+            if attempt_id == self.current_attempt:
+                return
+            if attempt_id != self.current_attempt + 1 or self.task_gateway is None:
+                raise TaskExecutionError("task_attempt_invalid")
+            try:
+                self.task_gateway.set_attempt(attempt_id)
+            except Exception:
+                raise TaskExecutionError("task_attempt_invalid") from None
+            self.current_attempt = attempt_id
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: ProviderSettings,
+        *,
+        max_provider_calls: int,
+        max_total_tokens: int,
+        max_output_tokens_per_call: int,
+    ) -> TaskRunContext:
+        return cls(
+            lambda: create_task_model(settings, max_output_tokens=max_output_tokens_per_call),
+            max_provider_calls=max_provider_calls,
+            max_total_tokens=max_total_tokens,
+            max_output_tokens_per_call=max_output_tokens_per_call,
+        )
+
+    @classmethod
+    def for_fake_model(
+        cls,
+        model: Any,
+        *,
+        max_provider_calls: int,
+        max_total_tokens: int,
+        max_output_tokens_per_call: int,
+    ) -> TaskRunContext:
+        return cls(
+            lambda: model,
+            max_provider_calls=max_provider_calls,
+            max_total_tokens=max_total_tokens,
+            max_output_tokens_per_call=max_output_tokens_per_call,
+        )
+
+    def model(self, *, stage: str) -> _TaskModel:
+        if stage not in _TASK_MODEL_STAGES:
+            raise ValueError("task_model_stage_invalid")
+        with self._lock:
+            if self._model is None:
+                try:
+                    self._model = self._model_factory()
+                except TaskProviderError:
+                    raise
+                except Exception:
+                    raise TaskProviderError("provider_setup_failed") from None
+            return _TaskModel(self._model, self, stage)
+
+    def usage_snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                key: value
+                for stage in _TASK_MODEL_STAGES
+                for key, value in (
+                    (f"{stage}_calls", self._stage_calls[stage]),
+                    (f"{stage}_reported_tokens", self._stage_tokens[stage]),
+                )
+            }
+
+    @property
+    def usage_unavailable(self) -> bool:
+        with self._lock:
+            return self._usage_unavailable
 
 
 def create_runtime(
@@ -35,7 +203,21 @@ def create_runtime(
     trace_mode: str | None = None,
     command_executor: CommandExecutor | None = None,
     allow_web_search: bool = True,
+    task_context: TaskRunContext | None = None,
 ) -> RuntimeState:
+    if task_context is not None:
+        filesystem = task_context.task_filesystem
+        if filesystem is None or task_context.task_tools is None or resume_from is not None:
+            raise ValueError("task_context_incomplete")
+        selected = workspace or filesystem.prepared.work
+        if (not selected.is_dir() or selected.is_symlink()
+                or selected.resolve(strict=True) != filesystem.prepared.work.resolve(strict=True)):
+            raise ValueError("task_workspace_mismatch")
+        return RuntimeState(
+            workspace=selected, approval_mode="deny", checkpoint_mode="off", trace_mode="off",
+            command_executor=None, allow_web_search=False, bash_env_file=None,
+            task_filesystem=filesystem,
+        )
     load_dotenv()
     selected = workspace or resume_from or default_workspace()
     selected.mkdir(parents=True, exist_ok=True)
@@ -67,11 +249,18 @@ def stream_agent_events(
     trace_mode: str | None = None,
     command_executor: CommandExecutor | None = None,
     allow_web_search: bool = True,
+    task_context: TaskRunContext | None = None,
 ) -> Iterator[dict[str, Any]]:
+    if task_context is not None and resume_workspace is not None:
+        raise ValueError("task_resume_unavailable")
+    if task_context is not None and (task_context.task_filesystem is None or task_context.task_tools is None):
+        raise ValueError("task_context_incomplete")
     resume_path = resume_workspace.expanduser() if resume_workspace is not None else None
     if resume_path is None:
         route = "workflow"
         entry_state: dict[str, Any] = {"task": task or "", "messages": []}
+        if task_context is not None:
+            entry_state["task_context"] = task_context
         for mode, event in build_entry_workflow().stream(entry_state, stream_mode=["updates", "custom"]):
             if mode == "custom":
                 yield {"type": "custom_event", "event": event}
@@ -93,6 +282,7 @@ def stream_agent_events(
         trace_mode=trace_mode,
         command_executor=command_executor,
         allow_web_search=allow_web_search,
+        task_context=task_context,
     )
     workflow = build_complex_workflow()
     yield {"type": "workspace", "path": str(state.workspace)}
@@ -111,6 +301,8 @@ def stream_agent_events(
             "attempts": 0,
             "max_attempts": max_attempts,
         }
+    if task_context is not None:
+        inputs["task_context"] = task_context
 
     yield from _stream_traced_workflow(workflow, inputs, state, resumed=resumed, resume_event=resume_event)
 

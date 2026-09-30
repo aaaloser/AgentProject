@@ -51,6 +51,7 @@
 每个 worker 记录可核验的进程身份（PID 加创建身份或平台等效机制），每个容器在启动前分配服务生成的 `instance_id`、`task_id`、`command_request_id`；Docker label 与名称使用固定 MokioClaw 命名空间，归属标识在创建容器时写入并记录在任务元数据中，避免“容器已启动但仅靠子进程 PID 才能发现”的窗口。控制器只终止身份完全匹配的 worker／容器，不触碰其它任务或非 MokioClaw 容器。启动、取消、超时和 dashboard 重启均调用 `TaskWorkerController.reconcile()`：先发现当前或先前实例遗留的归属资源，停止并确认移除，再把未完成运行任务标为 `interrupted`；无法确认时保持 `cleanup_failed` 和执行禁用。重启不重放任何批准或自动续跑。run/cancel、approval/cancel 与超时边界按同一任务锁串行决定；同一进程最多一个 active task、最多一个执行 worker。
 
 服务在用户明确指定的 `--task-root` 下保存任务副本与最小元数据。未传此选项时，原有 dashboard 继续只读运行，任务接口返回能力不可用。该目录必须解析为绝对路径，不能位于任何登记来源仓库、其 `.git` 目录或冻结证据目录内。每个任务有不可变 baseline 与可写 work 目录；baseline 不暴露给 Agent。Phase B 不自动删除任务产物：baseline、work、完整本地补丁及摘要会一直留在用户指定的 task-root，可能含私有源码。页面和文档提醒启动者避开同步盘与公开目录；目录权限沿用本机用户，清理由启动者负责。本阶段不设 Web 完整产物下载或自动 GC。
+任务的完整 `TaskSpec` 另存于 task-root 内的私有 `spec.json`，用于工作台重启后按原请求摘要恢复固定范围和预算；公开 `record.json` 仍只含摘要与状态。`spec.json` 含任务描述、相对源码范围和验证命令，按任务产物的同一留存与目录隐私规则处理，不经 API、事件或页面原样下载。
 
 ## 5. 固定提交与副本准备
 
@@ -92,6 +93,7 @@ Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全�
 | `POST /api/task-previews` | 验证 repo/base/anchor/范围，返回有时效的预览 ID、范围摘要和阻断项；不建任务副本。 |
 | `POST /api/tasks` | 校验预览 ID、规范请求摘要与幂等键，先持久化 `TaskRecord` 并进入 `preparing`，把准备交给独立后台执行器，立即以 `202` 返回 `task_id`；相同幂等请求返回原任务，不等待 Git blob 复制。 |
 | `GET /api/tasks/{id}`、`GET /api/tasks/{id}/events?after=N` | 返回脱敏状态、结果与有界事件摘要；轮询，不使用原始 graph 事件流。 |
+| `GET /api/tasks/{id}/result` | 清理完成后返回独立的补丁与固定命令验证摘要；不返回完整补丁或原始输出。 |
 | `POST /api/tasks/{id}/run` | 独立启动动作；执行门不通过则拒绝。 |
 | `POST /api/tasks/{id}/approvals/{request_id}` | 明确批准或拒绝一条当前待决命令。 |
 | `POST /api/tasks/{id}/cancel` | 请求取消并返回当前清理状态；可重复调用，客户端随后轮询终态或 `cleanup_failed`。 |
@@ -99,6 +101,18 @@ Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全�
 所有写接口检查 Host、精确 Origin、进程内 CSRF 令牌、JSON 类型与大小、仓库／任务身份和状态；不开放 CORS。服务只绑定 `127.0.0.1`。静态页面不用第三方资源，动态字符串只作为文本节点。任务 API 不提供任意文件读取、原始 prompt/response、完整 endpoint/query、headers、payload、完整 stdout/stderr 或下载原始补丁的路由。错误统一为 `code/message/retryable`，不回显路径或工具异常文本。
 
 事件投影只接受固定枚举：准备进度、运行阶段、审批请求／决定、工具结果类别、验证命令结果、补丁统计和终态。每条有 `task_id`、`attempt_id`（任务级事件为 null）、全任务单调 `sequence`、时间和大小上限；原始事件的未知字段直接丢弃，生成的 Public Event 禁止任何非白名单字段，并拒绝非当前 attempt 的事件及序号倒退／重复。原始 graph 事件先在 worker 内投影，不能直接写磁盘或发浏览器。页面显示修改文件、增删行数及经脱敏的有限补丁摘要；完整补丁只存于任务本地受限产物目录，供后续独立人工审阅，不自动应用。验证逐条显示实际命令、批准请求 ID、退出码、耗时、通过／失败／未运行及截断或脱敏说明；不把模型自述当作验证证据。
+
+2026-09-29 Task 10 诊断补充：任务工具在终止性失败前发布 `tool_failure` 摘要，公开字段仅为固定工具身份与固定失败类别，并沿用任务／attempt／序号身份。工具身份只取任务注册表内的固定名称；无法识别时为 `unknown`。失败类别只允许 `invalid_arguments`、`scope_denied`、`approval_denied_or_expired`、`tool_rejected`、`tool_exception`、`unknown`。只依据可信异常类型或完全匹配的内部错误码分类，不复制模型参数、异常文本、文件路径、命令、prompt、工具输出或 provider 信息；内层工具已报告失败时不重复把外层委派工具标为根因。此摘要用于以后受控任务定位，不能倒推之前五次真实试点的失败工具。
+
+2026-09-29 Task 10 provider 诊断补充：真实任务遇到 SDK 异常时，只按异常类型生成固定终态类别：认证或权限为 `provider_auth_failed`，限流为 `provider_rate_limited`，请求格式错误为 `provider_invalid_request`，连接或超时为 `provider_transport_failed`，服务端错误为 `provider_server_failed`，未知异常仍为 `provider_failed`。任务本地的请求次数或已报告 token 预算耗尽为 `provider_budget_exhausted`；缺少可靠用量仍为 `usage_unavailable`。worker 与父进程仅接受这些明确类别，不复制异常消息、响应体、URL 或密钥；预算、重试次数、发送范围与命令审批边界均不改变。分类仅能用于新运行，不能推断旧任务的具体 provider 根因。
+
+2026-09-30 Task 10 阶段预算诊断补充：用户审阅并同意在任务模型包装器中把每次调用固定归属到 `entry`、`chat`、`planner`、`code_agent`、`verifier`、`context_compressor` 六阶段。每阶段只累计**已启动的模型调用数**及响应 `usage_metadata.total_tokens` 中有效的**已报告 token 数**；调用失败仍计一次启动，但不能推断 provider 已接收或计费次数。缺失用量时保留已知部分值，并沿用 `usage_unavailable` 终态；单次响应可使已报告累计值越过预算。worker 在工作流正常结束或抛错时、终态写入前，仅发布一次 `budget_usage` 完整快照：十二个固定数值字段，沿用 Public Event 身份外壳，当前 `attempt_id` 只标识发布时所在尝试，数值跨该任务所有尝试累计。父进程严格校验阶段字段、数值与任务身份，丢弃未知字段；页面只显示这些固定阶段及数值。worker 在快照前崩溃、被终止或未建立任务上下文时视为用量未知，不将缺失解释为零。该诊断不记录 prompt、源码、工具参数与输出、provider 响应／异常文本、地址或凭据，不补填旧运行，也不改变调用预算、范围或审批。
+
+2026-09-30 Task 10 任务提示补充：隔离任务的 CodeAgent 使用单独、简短的系统提示，优先读取任务或规划给出的准确文件路径，在选定范围内尽早编辑已有文件并运行相关检查；`FileWriteTool` 只改写已有文件，待办状态在确有变化时更新，不要求每个编辑动作前后重复调用。普通 CLI/TUI 继续使用原 CodeAgent 提示。此提示调整不改变工具注册、读写范围、命令审批、provider 预算或重试规则；先由无 provider 假模型测试和全项目回归验证，再用于新的真实任务。既往预算耗尽只是提出这项改进的观察，不能证明提示是其根因。
+
+创建新任务开始时，页面立即解除旧任务 ID 与运行清单、结果、事件、审批的绑定，作废旧轮询响应并从 URL 移除旧 ID。新任务记录必须匹配当前仓库、固定提交及历史锚，才能绑定并加载其清单。创建响应不确定时保留原请求幂等键，先核对任务状态再考虑重试；浏览器控制超时也先核对是否已创建或启动，不盲目重复操作。
+
+2026-09-30 Task 10 编辑诊断校正：任务版 `FileEditTool` 在待替换文本不存在或不唯一时返回固定内部码 `task_edit_match_failed`，公开只归为既有的 `tool_rejected`；真实路径／文件访问拒绝仍返回 `task_file_access_denied`，公开归为 `scope_denied`。内部码不携带路径、片段、匹配次数或源码，公开事件字段和类别集合不变。该分类不能回溯旧任务，也不改变任何失败即终止、预算或权限边界。
 
 ## 8. 失败处理与验收
 
@@ -113,6 +127,8 @@ Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全�
 5. **真实试点级**：前四门均通过后，用户另行授权具体仓库、provider、预算与次数；记录真实结果和失败类别，不与 Rich/Click 冻结成绩混算。
 
 实现有代码变化时，用 `D:\envs\codeagent\Scripts\python.exe`、显式 `PYTHONPATH=src` 和每次新建的独立 `--basetemp` 跑相关及全项目 pytest；运行 Ruff、`git diff --check`、目标产物秘密格式扫描和冻结哈希只读核对。旧正式槽位不补跑。任何发现都不能以修改冻结 Rich/Click 分析或 ignored 实验证据来“修复”。
+
+网页任务的 `TodoWriteTool` 可记录模型提出的待办与验收条件，但验证命令只取任务创建时确认的固定清单。模型省略该参数、传空列表或提出其它命令，都不能更换清单或因此使有效的待办规划失败；任务若未指定固定验证命令，清单保持为空。普通 CLI/TUI 的规划工具契约不变。
 
 ## 9. 阶段划分与权限门
 

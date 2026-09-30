@@ -60,6 +60,7 @@ class LayeredMemory(TypedDict, total=False):
 class MokioGraphState(TypedDict, total=False):
     task: str
     runtime: RuntimeState
+    task_context: Any
     messages: Annotated[list[BaseMessage], add_messages]
     plan_summary: str
     todos: list[TodoItem]
@@ -67,6 +68,7 @@ class MokioGraphState(TypedDict, total=False):
     verification_commands: list[str]
     verification_results: list[VerificationResult]
     passed: bool
+    verifier_explicit_failure: bool
     attempts: int
     max_attempts: int
     final_answer: str

@@ -44,7 +44,7 @@ def test_same_origin_page_assets_and_safe_structure(temp_git_repo: Path) -> None
     assert 'lang="zh-CN"' in html
     for marker in (
         "repo-list", "commit-list", "detail-panel", "dashboard-status", "head-update", "load-more", "refresh-list",
-        "改动审查优先级（启发式）",
+        "改动审查优先级（启发式）", "task-verification-commands", "task-approvals", "task-final-result",
     ):
         assert marker in html
     assert re.search(r'<(?:script|link)\b[^>]+(?:src|href)="https?://', html, re.IGNORECASE) is None
@@ -59,10 +59,28 @@ def test_same_origin_page_assets_and_safe_structure(temp_git_repo: Path) -> None
     assert "@media" in css.text
     assert ":focus-visible" in css.text
     assert "textContent" in script.text
+    assert "visibleText" in script.text and "/result" in script.text
+    assert "固定提交完整 SHA" in script.text
+    assert "历史锚完整 SHA" in script.text
+    assert "当前 HEAD 完整 SHA" in script.text
+    assert "result.blocked_paths" in script.text and "blocker.reason" in script.text
     assert "innerHTML" not in script.text
     assert "AbortController" in script.text
     assert "https://" not in script.text
     assert "http://" not in script.text
+
+
+def test_real_task_controls_require_visible_fixed_run_policy(temp_git_repo: Path) -> None:
+    client = _client(temp_git_repo)
+    html = client.get("/").text
+    script = client.get("/static/app.js").text
+    assert 'id="task-run-policy"' in html
+    assert 'id="task-run" disabled' in html
+    assert 'id="task-cancel" disabled' in html
+    assert '/run-policy' in script
+    assert 'policy.base_sha !== state.taskBaseSha' in script
+    assert 'window.confirm' in script
+    assert 'demoAvailable' in script and 'runAvailable' in script
 
 
 def test_two_repository_demo_has_low_high_and_manual_review(temp_git_repo: Path, tmp_path: Path) -> None:

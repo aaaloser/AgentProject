@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import socket
 import time
 import webbrowser
@@ -14,17 +15,28 @@ from mokioclaw.dashboard.catalog import RepositoryCatalog
 from mokioclaw.dashboard.git_reader import LocalGitReader
 from mokioclaw.dashboard.pagination import CursorCodec
 from mokioclaw.dashboard.task_service import FakeTaskRunner, TaskService
+from mokioclaw.providers.openai_provider import ProviderSettings
 
 
 def launch_dashboard(
     paths: Sequence[Path], *, open_browser: bool = True, task_root: Path | None = None,
     task_image: str | None = None, enable_agent: bool = False,
 ) -> None:
-    """Serve only explicitly registered local repositories until interrupted."""
+    """Serve explicitly registered local repositories and optional task capability."""
+    if enable_agent and (task_root is None or task_image is None
+                         or re.fullmatch(r"sha256:[0-9a-f]{64}", task_image) is None):
+        raise ValueError("Agent mode needs a task root and fixed local image digest")
+    if task_image is not None and not enable_agent:
+        raise ValueError("Task image requires Agent mode")
     reader = LocalGitReader()
     catalog = RepositoryCatalog.from_paths(paths, reader)
-    task_service = TaskService(catalog, reader, task_root, fake_runner=FakeTaskRunner()) if task_root is not None else None
+    task_service = TaskService(
+        catalog, reader, task_root, fake_runner=None if enable_agent else FakeTaskRunner(),
+    ) if task_root is not None else None
     try:
+        if enable_agent:
+            assert task_service is not None and task_image is not None
+            task_service.configure_agent(ProviderSettings.from_environment(), task_image)
         app = create_dashboard_app(catalog, reader, CursorCodec(), task_service=task_service)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

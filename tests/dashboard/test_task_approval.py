@@ -86,6 +86,19 @@ def test_approval_is_exact_once_and_timeout_is_final(tmp_path: Path) -> None:
     assert not broker.consume(timed)
 
 
+def test_request_notification_precedes_wait_and_never_grants_approval(tmp_path: Path) -> None:
+    approval = _approval()
+    observed = []
+    broker = approval.ApprovalBroker(
+        wait_timeout_seconds=0.02, on_request=lambda request: observed.append(request),
+    )
+    request = _request(tmp_path)
+    result = broker.request(request)
+    assert observed == [request]
+    assert not result.approved
+    assert not broker.consume(request)
+
+
 def test_attempt_invalidation_rejects_pending_and_unconsumed_approval(tmp_path: Path) -> None:
     approval = _approval()
     broker = approval.ApprovalBroker(wait_timeout_seconds=0.3)
@@ -146,6 +159,38 @@ def test_command_gateway_never_executes_denied_or_changed_request(tmp_path: Path
     assert broker.decide(TASK, 1, request.command_request_id, request.canonical_digest(), True)
     thread.join(timeout=2)
     assert outcomes[0]["ok"] and len(calls) == 1 and calls[0].command == "echo hello"
+
+
+def test_gateway_records_only_the_consumed_approved_execution(tmp_path: Path) -> None:
+    approval = _approval()
+    execution = importlib.import_module("mokioclaw.dashboard.task_executor")
+    seen = []
+
+    class FakeExecutor:
+        def execute(self, request):
+            return {"ok": True, "exit_code": 0, "duration_ms": 17, "output_truncated": False}
+
+    broker = approval.ApprovalBroker(wait_timeout_seconds=1)
+    gateway = execution.TaskCommandGateway(
+        task_id=TASK, attempt_id=1, workspace=tmp_path / "work",
+        image_digest="sha256:" + "a" * 64, broker=broker, executor=FakeExecutor(),
+        record_receipt=lambda request, result: seen.append((request, result)),
+    )
+    outcomes = []
+    thread = threading.Thread(target=lambda: outcomes.append(gateway.run(
+        workspace=gateway.workspace, command="echo hello", timeout_seconds=5, max_output_chars=200,
+    )))
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not broker.pending(TASK) and time.monotonic() < deadline:
+        time.sleep(0.005)
+    request = broker.pending(TASK)[0]
+    assert broker.decide(TASK, 1, request.command_request_id, request.canonical_digest(), True)
+    thread.join(timeout=2)
+    assert len(seen) == 1 and seen[0][0] == request
+    assert seen[0][1] == {"ok": True, "exit_code": 0, "duration_ms": 17,
+                           "output_truncated": False}
+    assert outcomes[0]["command_request_id"] == request.command_request_id
 
 
 def test_gateway_attempt_change_invalidates_pending_command(tmp_path: Path) -> None:

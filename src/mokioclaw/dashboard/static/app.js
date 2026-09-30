@@ -17,13 +17,21 @@ const elements = {
   taskSelection: document.getElementById("task-selection"),
   taskScope: document.getElementById("task-scope"),
   taskDescription: document.getElementById("task-description"),
+  taskVerificationCommands: document.getElementById("task-verification-commands"),
   taskPreview: document.getElementById("task-preview"),
   taskCreate: document.getElementById("task-create"),
   taskDemoRun: document.getElementById("task-demo-run"),
   taskDemoCancel: document.getElementById("task-demo-cancel"),
+  taskRun: document.getElementById("task-run"),
+  taskCancel: document.getElementById("task-cancel"),
+  taskRunPolicy: document.getElementById("task-run-policy"),
+  taskGate: document.getElementById("task-gate"),
+  taskExplain: document.getElementById("task-explain"),
   taskStatus: document.getElementById("task-status"),
   taskPreviewResult: document.getElementById("task-preview-result"),
   taskSummary: document.getElementById("task-summary"),
+  taskApprovals: document.getElementById("task-approvals"),
+  taskFinalResult: document.getElementById("task-final-result"),
   taskEvents: document.getElementById("task-events"),
   localMode: document.getElementById("local-mode"),
 };
@@ -53,7 +61,8 @@ const state = {
   repositories: [], repoId: null, anchorSha: null, currentHeadSha: null, selectedSha: null,
   commits: [], pinnedCommit: null, nextCursor: null, epoch: 0, detailEpoch: 0, pageController: null, detailController: null,
   taskEpoch: 0, taskRepoId: null, taskBaseSha: null, taskId: null, taskPreviewData: null,
-  taskSequence: 0, taskController: null, taskTimer: null, taskToken: null, demoAvailable: false, taskIdempotency: null,
+  taskSequence: 0, taskBudgetUsageSeen: false, taskController: null, taskTimer: null, taskToken: null,
+  demoAvailable: false, runAvailable: false, taskRunPolicy: null, taskIdempotency: null,
 };
 
 function node(tag, className = "", value = null) {
@@ -69,6 +78,10 @@ function setStatus(target, message, isError = false) {
 }
 
 function shortSha(sha) { return sha ? sha.slice(0, 8) : "—"; }
+function visibleText(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f]/g, (character) =>
+    `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
 
 function dateLabel(value) {
   const date = new Date(value);
@@ -78,12 +91,14 @@ function dateLabel(value) {
 
 function currentRepository() { return state.repositories.find((item) => item.id === state.repoId) || null; }
 
-function updateUrl(repoId, sha) {
+function updateUrl(repoId, sha, taskId = null) {
   const url = new URL(window.location.href);
   if (repoId) url.searchParams.set("repo", repoId);
   else url.searchParams.delete("repo");
   if (sha) url.searchParams.set("sha", sha);
   else url.searchParams.delete("sha");
+  if (taskId) url.searchParams.set("task", taskId);
+  else url.searchParams.delete("task");
   url.searchParams.delete("anchor");
   window.history.replaceState(null, "", url);
 }
@@ -224,6 +239,7 @@ async function loadPage(cursor, epoch, restoreSha = null) {
     }
     renderRepositoryContext();
     renderHeadUpdate();
+    renderTaskSelection();
     renderCommits();
     elements.refreshList.disabled = false;
     setStatus(elements.commitStatus, state.commits.length ? "" : "这个仓库还没有提交。", false);
@@ -393,11 +409,31 @@ async function selectCommit(sha) {
 }
 
 const taskStateLabels = {
-  draft: "草稿", preparing: "正在准备副本", prepared: "副本已准备", running: "状态演示运行中",
-  awaiting_approval: "演示审批等待", verifying: "演示验证阶段", stopping: "正在收束演示",
-  cancelling: "正在停止演示", completed: "演示完成 · 未运行验证", failed: "演示失败",
-  cancelled: "演示已取消", timed_out: "超时", interrupted: "已中断", cleanup_failed: "清理失败 · 禁止新任务",
+  draft: "草稿", preparing: "正在准备副本", prepared: "副本已准备", running: "运行中",
+  awaiting_approval: "命令等待审批", verifying: "验证阶段", stopping: "正在收束",
+  cancelling: "正在停止", completed: "任务完成", failed: "任务失败",
+  cancelled: "任务已取消", timed_out: "超时", interrupted: "已中断", cleanup_failed: "清理失败 · 禁止新任务",
 };
+const blockerLabels = {
+  unsafe_path: "不安全路径", case_collision: "大小写路径冲突", excluded_path: "隐私或证据路径已排除",
+  symlink: "符号链接", gitlink: "嵌套 Git 仓库", non_regular: "不是普通文件",
+  file_too_large: "单文件超限", too_many_files: "文件数量超限", total_too_large: "总字节数超限",
+};
+
+function renderTaskSelection() {
+  if (!state.taskRepoId || !state.taskBaseSha || state.taskRepoId !== state.repoId) {
+    elements.taskSelection.textContent = "先选择仓库和提交。";
+    return;
+  }
+  const repository = currentRepository();
+  elements.taskSelection.replaceChildren(
+    node("p", "", `仓库：${repository?.name || "已选仓库"}`),
+    node("p", "", `固定提交完整 SHA：${state.taskBaseSha}`),
+    node("p", "", `历史锚完整 SHA：${state.anchorSha || "未知"}`),
+    node("p", "", `当前 HEAD 完整 SHA：${state.currentHeadSha || "未知"}`),
+  );
+  if (repository?.dirty) elements.taskSelection.append(node("p", "task-warning", "来源工作树含未提交改动；任务只使用上方固定提交。"));
+}
 
 function resetTaskIdentity(repoId, sha) {
   state.taskEpoch += 1;
@@ -408,16 +444,23 @@ function resetTaskIdentity(repoId, sha) {
   state.taskId = null;
   state.taskPreviewData = null;
   state.taskIdempotency = null;
+  state.taskRunPolicy = null;
   state.taskSequence = 0;
+  state.taskBudgetUsageSeen = false;
   elements.taskPreviewResult.replaceChildren();
   elements.taskSummary.replaceChildren();
+  elements.taskRunPolicy.replaceChildren();
+  elements.taskApprovals.replaceChildren();
+  elements.taskFinalResult.replaceChildren();
   elements.taskEvents.replaceChildren();
   setStatus(elements.taskStatus, "");
-  elements.taskSelection.textContent = repoId && sha ? `固定提交 ${shortSha(sha)} · ${currentRepository()?.name || "已选仓库"}` : "先选择仓库和提交。";
+  renderTaskSelection();
   elements.taskPreview.disabled = !repoId || !sha;
   elements.taskCreate.disabled = true;
   elements.taskDemoRun.disabled = true;
   elements.taskDemoCancel.disabled = true;
+  elements.taskRun.disabled = true;
+  elements.taskCancel.disabled = true;
 }
 
 async function postTask(path, payload, extraHeaders = {}) {
@@ -461,6 +504,11 @@ async function previewTask() {
     elements.taskPreviewResult.replaceChildren(summary);
     if (result.blocked_paths.length) {
       elements.taskPreviewResult.append(node("p", "task-warning", "所选范围含不支持的文件，请调整范围后重试。"));
+      const blockers = node("ul", "task-blockers");
+      for (const blocker of result.blocked_paths) {
+        blockers.append(node("li", "", `${visibleText(blocker.path || "所选范围")} · ${blockerLabels[blocker.reason] || visibleText(blocker.reason)}`));
+      }
+      elements.taskPreviewResult.append(blockers);
       setStatus(elements.taskStatus, "预览存在阻断项。", true);
     } else {
       elements.taskCreate.disabled = false;
@@ -472,11 +520,17 @@ async function previewTask() {
 }
 
 function taskNumber(id) { return Number(document.getElementById(id).value); }
+function verificationCommands() {
+  return elements.taskVerificationCommands.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+}
 
 async function createTask() {
-  const epoch = state.taskEpoch;
   const preview = state.taskPreviewData;
-  if (!preview || !state.taskIdempotency || !state.taskToken) return;
+  const idempotencyKey = state.taskIdempotency;
+  if (!preview || !idempotencyKey || !state.taskToken) return;
+  resetTaskIdentity(state.repoId, state.selectedSha);
+  updateUrl(state.repoId, state.selectedSha);
+  const epoch = state.taskEpoch;
   elements.taskCreate.disabled = true;
   setStatus(elements.taskStatus, "正在建立任务记录…");
   try {
@@ -484,18 +538,22 @@ async function createTask() {
       preview_id: preview.preview_id, repo_id: preview.repo_id, base_sha: preview.base_sha,
       anchor_sha: preview.anchor_sha, source_read_scope: taskScope(),
       description: elements.taskDescription.value, max_seconds: taskNumber("task-max-seconds"),
-      max_attempts: taskNumber("task-max-attempts"), verification_commands: [],
+      max_attempts: taskNumber("task-max-attempts"), verification_commands: verificationCommands(),
       max_provider_calls: taskNumber("task-max-calls"), max_total_tokens: taskNumber("task-max-tokens"),
       max_output_tokens_per_call: taskNumber("task-output-tokens"),
-    }, { "Idempotency-Key": state.taskIdempotency });
-    if (epoch !== state.taskEpoch || record.repo_id !== state.repoId || record.base_sha !== state.selectedSha) return;
+    }, { "Idempotency-Key": idempotencyKey });
+    if (epoch !== state.taskEpoch || record.repo_id !== state.repoId
+      || record.base_sha !== state.selectedSha || record.anchor_sha !== state.anchorSha) return;
     state.taskId = record.task_id;
+    updateUrl(state.repoId, state.selectedSha, record.task_id);
     renderTaskRecord(record);
     void pollTask(epoch);
   } catch {
     if (epoch === state.taskEpoch) {
+      state.taskPreviewData = preview;
+      state.taskIdempotency = idempotencyKey;
       elements.taskCreate.disabled = false;
-      setStatus(elements.taskStatus, "任务创建失败；请检查说明、范围和限额。", true);
+      setStatus(elements.taskStatus, "任务创建结果未确认；请先核对任务状态，再用原请求重试。", true);
     }
   }
 }
@@ -504,8 +562,38 @@ function renderTaskRecord(record) {
   const label = taskStateLabels[record.state] || "状态未知";
   elements.taskSummary.replaceChildren(node("p", "", `任务 ${record.task_id} · ${label}`));
   elements.taskDemoRun.disabled = !state.demoAvailable || record.state !== "prepared";
-  elements.taskDemoCancel.disabled = !["running", "awaiting_approval", "verifying"].includes(record.state);
+  elements.taskDemoCancel.disabled = !state.demoAvailable || !["running", "awaiting_approval", "verifying"].includes(record.state);
+  elements.taskRun.disabled = !state.runAvailable || !state.taskRunPolicy || record.state !== "prepared";
+  elements.taskCancel.disabled = !state.runAvailable || !["running", "awaiting_approval", "verifying"].includes(record.state);
   setStatus(elements.taskStatus, label, ["failed", "cleanup_failed"].includes(record.state));
+}
+
+function renderRunPolicy(policy) {
+  const panel = elements.taskRunPolicy;
+  panel.replaceChildren(node("h3", "", "真实运行前核对固定清单"));
+  panel.append(
+    node("p", "", `任务 ${policy.task_id} · 仓库 ${policy.repo_id}`),
+    node("p", "", `固定提交 ${policy.base_sha} · 历史锚 ${policy.anchor_sha}`),
+    node("p", "", `任务说明：${visibleText(policy.description)}`),
+    node("p", "", `读取范围：${policy.source_read_scope.map(visibleText).join("、") || "无"}`),
+    node("p", "", `写入范围：${policy.source_write_scope.map(visibleText).join("、") || "无"} · 暂存范围：${visibleText(policy.task_scratch_scope)}`),
+    node("p", "", `模型 ${visibleText(policy.model)} · 镜像 ${policy.image_digest} · 容器网络 ${policy.network}`),
+    node("p", "", `限额：${policy.max_seconds} 秒、${policy.max_attempts} 次尝试、${policy.max_provider_calls} 次 provider 请求、${policy.max_total_tokens} token、单次输出 ${policy.max_output_tokens_per_call} token`),
+  );
+  const commands = node("ol");
+  for (const command of policy.verification_commands) commands.append(node("li", "", visibleText(command)));
+  panel.append(node("h4", "", "固定验证命令（每条仍需单独批准）"), commands);
+}
+
+async function loadRunPolicy(epoch, taskId) {
+  if (!state.runAvailable || state.taskRunPolicy) return;
+  const policy = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}/run-policy`, new AbortController());
+  if (epoch !== state.taskEpoch || taskId !== state.taskId || policy.task_id !== taskId
+    || policy.repo_id !== state.repoId || policy.base_sha !== state.taskBaseSha
+    || policy.anchor_sha !== state.anchorSha) return;
+  state.taskRunPolicy = policy;
+  renderRunPolicy(policy);
+  elements.taskRun.disabled = false;
 }
 
 function renderTaskEvents(events) {
@@ -514,11 +602,76 @@ function renderTaskEvents(events) {
     state.taskSequence = event.sequence;
     let label = event.kind;
     if (event.kind === "state") label = taskStateLabels[event.data.state] || "状态更新";
-    else if (event.kind === "stage") label = `演示阶段：${event.data.phase}`;
-    else if (event.kind === "verification") label = "验证未运行（演示）";
-    else if (event.kind === "approval_request") label = "演示审批等待（无命令）";
-    else if (event.kind === "approval_decision") label = "演示审批决定（无命令执行）";
+    else if (event.kind === "stage") label = `阶段：${event.data.phase}`;
+    else if (event.kind === "budget_usage") {
+      state.taskBudgetUsageSeen = true;
+      const stages = [
+        ["entry", "入口"], ["chat", "聊天"], ["planner", "规划"],
+        ["code_agent", "CodeAgent"], ["verifier", "验证"], ["context_compressor", "上下文压缩"],
+      ];
+      label = `已报告用量（本任务累计）：${stages.map(([key, name]) =>
+        `${name} ${event.data[`${key}_calls`]} 次 / ${event.data[`${key}_reported_tokens`]} token`).join("；")}`;
+    }
+    else if (event.kind === "verification") label = `验证：${event.data.status}`;
+    else if (event.kind === "tool_failure") label = `工具失败：${visibleText(event.data.tool)} · ${visibleText(event.data.category)}`;
+    else if (event.kind === "approval_request") label = "命令等待审批";
+    else if (event.kind === "approval_decision") label = `审批：${event.data.decision}`;
     elements.taskEvents.append(node("li", "", `${event.sequence} · ${label}`));
+  }
+}
+
+function renderTaskResult(result) {
+  const panel = elements.taskFinalResult;
+  panel.replaceChildren(node("h3", "", "任务结果"));
+  panel.append(node("p", "", `任务：${result.status} · 验证：${result.verification_status} · 固定提交：${shortSha(result.base_sha)}`));
+  if (result.failure_kind) panel.append(node("p", "task-warning", `失败类别：${result.failure_kind}`));
+  if (!state.taskBudgetUsageSeen) panel.append(node("p", "task-warning", "阶段模型用量未知：未收到脱敏汇总。"));
+  panel.append(node("p", "", `补丁：${result.patch_summary.status} · ${result.patch_summary.changed_files} 个文件 · +${result.patch_summary.added_lines} / -${result.patch_summary.deleted_lines}`));
+  if (result.patch_summary.reason) panel.append(node("p", "task-warning", `补丁限制：${result.patch_summary.reason}`));
+  if (result.changed_files.length) {
+    const files = node("ul");
+    for (const file of result.changed_files) files.append(node("li", "", file));
+    panel.append(files);
+  }
+  if (result.verification_results.length) {
+    panel.append(node("h4", "", "固定命令验证"));
+    const checks = node("ol");
+    for (const check of result.verification_results) {
+      checks.append(node("li", "", `第 ${check.attempt_id} 次 · ${visibleText(check.command)} · ${check.status} · 审批 ${check.command_request_id || "无"} · 退出码 ${check.exit_code ?? "无"} · ${check.duration_ms ?? "无"} ms · 输出未展示${check.output_truncated ? "，原始输出已截断" : ""}`));
+    }
+    panel.append(checks);
+  }
+  if (result.limitations.length) panel.append(node("p", "task-warning", `限制：${result.limitations.join("、")}`));
+}
+
+async function decideTaskApproval(approval, approved) {
+  if (!state.taskId) return;
+  try {
+    await postTask(`/api/tasks/${encodeURIComponent(state.taskId)}/approvals/${encodeURIComponent(approval.command_request_id)}`, {
+      attempt_id: approval.attempt_id, execution_digest: approval.execution_digest, approved,
+    });
+    elements.taskApprovals.replaceChildren();
+    void pollTask(state.taskEpoch);
+  } catch {
+    setStatus(elements.taskStatus, "审批请求已失效，请刷新任务状态。", true);
+  }
+}
+
+function renderTaskApprovals(approvals) {
+  const panel = elements.taskApprovals;
+  panel.replaceChildren();
+  for (const approval of approvals) {
+    const box = node("section", "task-approval");
+    box.append(node("h3", "", `第 ${approval.attempt_id} 次尝试 · 待审批命令`));
+    box.append(node("pre", "", visibleText(approval.command)));
+    box.append(node("p", "", `目录 ${approval.cwd} · 超时 ${approval.timeout_seconds} 秒 · 镜像 ${approval.image_digest} · 网络 ${approval.network}`));
+    const approve = node("button", "", "批准这一次执行");
+    const deny = node("button", "", "拒绝");
+    approve.type = "button"; deny.type = "button";
+    approve.addEventListener("click", () => { approve.disabled = true; deny.disabled = true; void decideTaskApproval(approval, true); });
+    deny.addEventListener("click", () => { approve.disabled = true; deny.disabled = true; void decideTaskApproval(approval, false); });
+    box.append(approve, deny);
+    panel.append(box);
   }
 }
 
@@ -532,9 +685,22 @@ async function pollTask(epoch) {
     if (epoch !== state.taskEpoch || taskId !== state.taskId || repoId !== state.repoId || sha !== state.selectedSha
       || record.task_id !== taskId || record.repo_id !== repoId || record.base_sha !== sha) return;
     renderTaskRecord(record);
+    if (record.state === "prepared") await loadRunPolicy(epoch, taskId);
     const result = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}/events?after=${state.taskSequence}`, new AbortController());
     if (epoch !== state.taskEpoch || taskId !== state.taskId || result.task_id !== taskId) return;
     renderTaskEvents(result.events);
+    if (record.state === "awaiting_approval") {
+      const pending = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}/approvals`, new AbortController());
+      if (epoch !== state.taskEpoch || taskId !== state.taskId) return;
+      renderTaskApprovals(pending.approvals);
+    } else elements.taskApprovals.replaceChildren();
+    if (record.state === "cleanup_failed") {
+      elements.taskFinalResult.replaceChildren(node("p", "task-warning", "执行资源清理尚未确认，结果暂不可用。"));
+    } else if (["completed", "failed", "cancelled", "timed_out", "interrupted"].includes(record.state)) {
+      const finalResult = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}/result`, new AbortController());
+      if (epoch !== state.taskEpoch || taskId !== state.taskId || finalResult.task_id !== taskId) return;
+      renderTaskResult(finalResult);
+    }
     if (result.events.length === 100 || !["completed", "failed", "cancelled", "timed_out", "interrupted", "cleanup_failed", "prepared"].includes(record.state)) {
       state.taskTimer = window.setTimeout(() => { void pollTask(epoch); }, 800);
     }
@@ -557,22 +723,77 @@ async function demoAction(action) {
   }
 }
 
+async function agentAction(action) {
+  const taskId = state.taskId;
+  const epoch = state.taskEpoch;
+  if (!taskId || !state.runAvailable) return;
+  if (action === "run") {
+    const policy = state.taskRunPolicy;
+    if (!policy || policy.task_id !== taskId || policy.base_sha !== state.taskBaseSha) return;
+    if (!window.confirm(`运行固定任务 ${taskId}？\n提交 ${policy.base_sha}\n模型 ${policy.model}\n最多 ${policy.max_provider_calls} 次 provider 请求。命令仍逐条审批。`)) return;
+    elements.taskRun.disabled = true;
+  }
+  try {
+    const record = await postTask(`/api/tasks/${encodeURIComponent(taskId)}/${action}`, {});
+    if (epoch !== state.taskEpoch || taskId !== state.taskId) return;
+    renderTaskRecord(record);
+    void pollTask(epoch);
+  } catch {
+    if (epoch === state.taskEpoch) setStatus(elements.taskStatus, "真实任务操作未完成；请刷新状态并核对运行门。", true);
+  }
+}
+
 async function initializeTaskSession() {
   try {
     const session = await requestJson("/api/task-session", new AbortController());
     if (!session.task_available) return;
     state.taskToken = session.csrf_token;
     state.demoAvailable = session.demo_available === true;
+    state.runAvailable = session.run_available === true;
+    elements.taskDemoRun.hidden = !state.demoAvailable;
+    elements.taskDemoCancel.hidden = !state.demoAvailable;
+    elements.taskRun.hidden = !state.runAvailable;
+    elements.taskCancel.hidden = !state.runAvailable;
+    if (state.runAvailable) {
+      elements.taskGate.textContent = "真实 Agent 可用 · 逐任务确认";
+      elements.taskExplain.textContent = "固定提交建立隔离副本；先核对完整清单，再单独确认运行。每条命令需要另外审批。";
+    }
     elements.taskPanel.hidden = false;
     elements.localMode.lastChild.textContent = "仅本机 · 来源只读";
     elements.taskPreview.disabled = !state.repoId || !state.selectedSha;
   } catch { /* Commit review stays usable when task support is unavailable. */ }
 }
 
+async function restoreTaskFromUrl(taskId) {
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(taskId) || !state.taskToken
+    || !state.repoId || !state.selectedSha || !state.anchorSha) return;
+  const epoch = state.taskEpoch;
+  const repoId = state.repoId;
+  const sha = state.selectedSha;
+  const anchor = state.anchorSha;
+  try {
+    const record = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}`, new AbortController());
+    if (epoch !== state.taskEpoch || repoId !== state.repoId || sha !== state.selectedSha) return;
+    if (record.task_id !== taskId || record.repo_id !== repoId
+      || record.base_sha !== sha || record.anchor_sha !== anchor) {
+      setStatus(elements.taskStatus, "任务链接与所选仓库或提交不匹配。", true);
+      return;
+    }
+    state.taskId = taskId;
+    updateUrl(repoId, sha, taskId);
+    renderTaskRecord(record);
+    void pollTask(epoch);
+  } catch {
+    if (epoch === state.taskEpoch) setStatus(elements.taskStatus, "任务链接已失效，请重新准备任务。", true);
+  }
+}
+
 async function initialize() {
   const params = new URL(window.location.href).searchParams;
   const requestedRepo = params.get("repo");
   const requestedSha = params.get("sha");
+  const requestedTask = params.get("task");
+  const sessionReady = initializeTaskSession();
   try {
     const repositories = await requestJson("/api/repositories", new AbortController());
     if (!Array.isArray(repositories)) throw new Error("仓库列表格式不正确");
@@ -585,6 +806,10 @@ async function initialize() {
     }
     const selected = repositories.find((item) => item.id === requestedRepo) || repositories[0];
     await selectRepository(selected.id, selected.id === requestedRepo ? requestedSha : null);
+    if (requestedTask) {
+      await sessionReady;
+      await restoreTaskFromUrl(requestedTask);
+    }
   } catch (error) {
     setStatus(elements.dashboardStatus, errorMessage(error, "仓库列表读取"), true);
     setStatus(elements.commitStatus, "仓库列表不可用。", true);
@@ -598,5 +823,6 @@ elements.taskPreview.addEventListener("click", () => { void previewTask(); });
 elements.taskCreate.addEventListener("click", () => { void createTask(); });
 elements.taskDemoRun.addEventListener("click", () => { void demoAction("run"); });
 elements.taskDemoCancel.addEventListener("click", () => { void demoAction("cancel"); });
+elements.taskRun.addEventListener("click", () => { void agentAction("run"); });
+elements.taskCancel.addEventListener("click", () => { void agentAction("cancel"); });
 void initialize();
-void initializeTaskSession();

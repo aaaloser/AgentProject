@@ -16,11 +16,11 @@ MokioClaw 是一个教学优先的 Mini CodeAgent 项目。它按 Agent 系统�
 
 ## 当前阶段
 
-当前产品方向是先完成本地仓库审查核心。运行 `mokioclaw dashboard --repo <仓库路径> --repo <另一个仓库路径>` 后，浏览器左栏列出本次指定的仓库，中栏浏览各仓库的提交，右栏显示所选提交的审查优先级、规则依据和信息缺口。可以传入私有本地仓库；服务仅监听 `127.0.0.1`，不要求 GitHub 登录，也不会运行 Agent 或调用模型。完整步骤见[本地工作台演示说明](docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md)。
+当前产品方向是先完成本地仓库审查核心。运行 `mokioclaw dashboard --repo <仓库路径> --repo <另一个仓库路径>` 后，浏览器左栏列出本次指定的仓库，中栏浏览各仓库的提交，右栏显示所选提交的审查优先级、规则依据和信息缺口。可以传入私有本地仓库；服务仅监听 `127.0.0.1`。普通启动不要求 GitHub 登录，不运行 Agent 或调用模型；真实任务需要单独显式启用。完整步骤见[本地工作台演示说明](docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md)。
 
-本地核心已完成本轮验收：完整项目测试 535 passed、3 个 Windows 符号链接能力限制导致的 skipped、0 failed。运行完整 Docker 评测回归需要本机 Docker daemon 访问权限；工作台本身不依赖 Docker。
+只读工作台原阶段的完整项目验收为 535 passed、3 个 Windows 符号链接能力限制导致的 skipped、0 failed。阶段 B 的最新非 Docker 回归与能力边界见[技术进度记录](docs/TECHNICAL_IMPLEMENTATION_PROGRESS.md)。工作台的仓库浏览与无 provider 演示不依赖 Docker；真实命令执行须经过独立的容器隔离和审批门。
 
-这里的 `high`、`medium`、`low` 是人工审查顺序建议，`manual_review` 表示规则所需信息不足或提交类型超出规则。它们不是漏洞结论、事故概率或 Agent 修复成绩。私有 GitHub 账户接入和从页面启动 Agent 修复属于后续独立设计。
+这里的 `high`、`medium`、`low` 是人工审查顺序建议，`manual_review` 表示规则所需信息不足或提交类型超出规则。它们不是漏洞结论、事故概率或 Agent 修复成绩。私有 GitHub 账户接入仍属后续设计；页面启动真实 Agent 的能力门保持关闭。
 
 下文记录既有 Agent/TUI 能力及教学背景；与只读工作台是不同的运行路径。此前第 6 阶段引入了 Textual TUI，飞书 API 交互仍未接入。
 
@@ -348,6 +348,13 @@ uv run mokioclaw dashboard --repo "D:\path\to\repo-one" --repo "D:\path\to\repo-
 
 服务启动后打开本机浏览器；加 `--no-browser` 可只打印本机地址，手动打开。按 `Ctrl+C` 停止。只传入你希望在本机页面显示的仓库路径；详细演示和故障排查见[演示说明](docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md)。
 
+要预览固定提交任务并准备独立副本，可另加 `--task-root`，指定一个不在来源仓库、同步盘或公开目录中的本机目录。默认页面提供无 provider 的状态演示。只有另传 `--enable-agent --task-image sha256:<64 位十六进制摘要>`、配置任务专用 provider 环境并通过本机固定镜像检查，真实运行操作才会出现；每个任务仍要核对清单、再次确认运行，命令逐条批准。任务根会长期保存私有 baseline、work 和可能生成的完整补丁，需由启动者自行管理与清理。结果页分别显示任务状态、补丁摘要与实际验证状态；“完成”不等于“验证通过”。
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path 'src').Path
+& 'D:\envs\codeagent\Scripts\python.exe' -m mokioclaw dashboard --repo "D:\path\to\repo-one" --task-root "D:\private\mokioclaw-tasks"
+```
+
 已有 Python 环境安装了依赖，也可以不运行 `uv sync`，直接启动工作台：
 
 ```powershell
@@ -355,7 +362,7 @@ $env:PYTHONPATH = (Resolve-Path 'src').Path
 & 'D:\envs\codeagent\Scripts\python.exe' -m mokioclaw dashboard --repo "D:\path\to\repo-one" --repo "D:\path\to\repo-two"
 ```
 
-以下 `.env` 设置和 Agent 命令只用于既有 Agent 路径；启动 dashboard 不需要配置 provider 凭据。
+以下 `.env` 设置和 Agent 命令只用于既有 Agent 路径；普通 dashboard 与无 provider 演示不需要配置 provider 凭据。显式真实任务模式只取上文列出的 `MOKIO_TASK_*` 进程环境变量。
 
 `.env` 配置：
 

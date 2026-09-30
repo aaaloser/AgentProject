@@ -9,6 +9,7 @@ import re
 import time
 from dataclasses import asdict, dataclass
 from threading import Condition, RLock
+from typing import Callable
 
 from mokioclaw.core.approval import ApprovalDecision
 
@@ -66,7 +67,10 @@ class _Pending:
 
 
 class ApprovalBroker:
-    def __init__(self, *, wait_timeout_seconds: float = 120) -> None:
+    def __init__(
+        self, *, wait_timeout_seconds: float = 120,
+        on_request: Callable[[ExecutionRequest], None] | None = None,
+    ) -> None:
         if wait_timeout_seconds <= 0 or wait_timeout_seconds > 600:
             raise ValueError("Invalid approval timeout")
         self.wait_timeout_seconds = wait_timeout_seconds
@@ -74,6 +78,7 @@ class ApprovalBroker:
         self._pending: dict[tuple[str, str], _Pending] = {}
         self._seen: set[tuple[str, str]] = set()
         self._invalid_attempts: set[tuple[str, int]] = set()
+        self._on_request = on_request
 
     def request(self, request: ExecutionRequest, *, wait_timeout_seconds: float | None = None) -> ApprovalDecision:
         digest = request.canonical_digest()
@@ -89,6 +94,15 @@ class ApprovalBroker:
                 return ApprovalDecision(False, "attempt_invalidated")
             pending = _Pending(request, digest, time.monotonic() + timeout)
             self._pending[key] = pending
+        if self._on_request is not None:
+            try:
+                self._on_request(request)
+            except Exception:
+                with self._condition:
+                    pending.invalidated = True
+                    self._condition.notify_all()
+                return ApprovalDecision(False, "approval_unavailable")
+        with self._condition:
             while pending.decision is None and not pending.invalidated:
                 remaining = pending.deadline - time.monotonic()
                 if remaining <= 0:

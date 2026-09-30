@@ -71,6 +71,22 @@ def test_idempotency_matches_request_digest_and_never_persists_description(tmp_p
     assert json.loads(persisted)["task_id"] == first.task_id
 
 
+def test_private_spec_survives_restart_and_rejects_changed_contents(tmp_path: Path) -> None:
+    models, store_module = _task_api()
+    store = store_module.TaskStore(tmp_path)
+    spec = _spec(models, description="PRIVATE TASK TEXT")
+    record = store.create(spec, "restart-spec")
+    recovered = store_module.TaskStore(tmp_path).get_spec(record.task_id)
+    assert recovered == replace(spec, task_id=record.task_id, created_at=record.created_at)
+    assert "PRIVATE TASK TEXT" not in (tmp_path / record.task_id / "record.json").read_text(encoding="utf-8")
+    private_path = tmp_path / record.task_id / "spec.json"
+    changed = json.loads(private_path.read_text(encoding="utf-8"))
+    changed["description"] = "tampered"
+    private_path.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(store_module.TaskConflict):
+        store_module.TaskStore(tmp_path).get_spec(record.task_id)
+
+
 def test_terminal_state_requires_confirmed_cleanup_and_rejects_late_event(tmp_path: Path) -> None:
     models, store_module = _task_api()
     store = store_module.TaskStore(tmp_path)
@@ -90,6 +106,31 @@ def test_terminal_state_requires_confirmed_cleanup_and_rejects_late_event(tmp_pa
             1,
             models.PublicTaskEvent(done.task_id, 1, done.sequence + 1, "2026-09-28T00:00:01Z", "stage", {"name": "late"}),
         )
+
+
+def test_parent_execution_receipt_persists_without_command_or_output(tmp_path: Path) -> None:
+    models, store_module = _task_api()
+    store = store_module.TaskStore(tmp_path)
+    running = _running(store, _spec(models))
+    request_id = "request_12345678901234"
+    store.register_command(running.task_id, request_id)
+    receipt = models.ExecutionReceipt(
+        attempt_id=1, command_request_id=request_id,
+        command_sha256="a" * 64, execution_digest="b" * 64,
+        exit_code=0, duration_ms=21, ok=True, output_truncated=False,
+    )
+    saved = store.record_execution_receipt(running.task_id, "instance-1", receipt)
+    assert saved.execution_receipts == (receipt,)
+    recovered = store_module.TaskStore(tmp_path).get(running.task_id)
+    assert recovered.execution_receipts == (receipt,)
+    persisted = (tmp_path / running.task_id / "record.json").read_text(encoding="utf-8")
+    assert "python -m pytest" not in persisted and "stdout" not in persisted
+    for instance, value in (("wrong-instance", receipt), ("instance-1", receipt)):
+        with pytest.raises(store_module.TaskConflict):
+            store.record_execution_receipt(running.task_id, instance, value)
+    store.transition(running.task_id, "running", "stopping", {})
+    with pytest.raises(store_module.TaskConflict):
+        store.record_execution_receipt(running.task_id, "instance-1", replace(receipt, command_request_id="other_request_123456"))
 
 
 def test_attempt_and_global_sequence_reject_replays_and_wrong_identity(tmp_path: Path) -> None:

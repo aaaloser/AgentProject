@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -18,9 +19,14 @@ if TYPE_CHECKING:
 
 
 MAX_FILES = 5000
+MAX_DIRECTORIES = 5000
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_PATCH_BYTES = 32 * 1024 * 1024
+_SUSPECTED_SECRET = re.compile(
+    rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
+    rb"(?i:(?:api[_-]?key|secret|access[_-]?token|authorization))\s*[:=]\s*[\"']?[^\s\"']{12,}"
+)
 
 
 class PatchUnsafe(ValueError):
@@ -42,8 +48,11 @@ def _scan(root: Path) -> dict[str, int]:
         raise PatchUnsafe("unsafe_root")
     files: dict[str, int] = {}
     total = 0
+    directory_count = 1
     pending = [(root, "")]
     while pending:
+        if directory_count > MAX_DIRECTORIES:
+            raise PatchUnsafe("workspace_limit_exceeded")
         directory, prefix = pending.pop()
         if _is_reparse(directory) or not stat.S_ISDIR(directory.lstat().st_mode):
             raise PatchUnsafe("unsafe_directory")
@@ -56,6 +65,9 @@ def _scan(root: Path) -> dict[str, int]:
                 ):
                     raise PatchUnsafe("link_in_workspace")
                 if stat.S_ISDIR(info.st_mode):
+                    directory_count += 1
+                    if directory_count > MAX_DIRECTORIES:
+                        raise PatchUnsafe("workspace_limit_exceeded")
                     pending.append((Path(entry.path), relative + "/"))
                 elif stat.S_ISREG(info.st_mode):
                     if info.st_size > MAX_FILE_BYTES:
@@ -103,6 +115,19 @@ def _publish(prepared: PreparedTask, patch: bytes) -> Path:
     return artifacts / "patch.diff"
 
 
+def _remove_previous_patch(prepared: PreparedTask) -> None:
+    artifacts = prepared.root / "artifacts"
+    if not artifacts.exists() and not artifacts.is_symlink():
+        return
+    if _is_reparse(artifacts) or not stat.S_ISDIR(artifacts.lstat().st_mode):
+        raise PatchUnsafe("unsafe_artifact_directory")
+    path = artifacts / "patch.diff"
+    if path.exists() or path.is_symlink():
+        if _is_reparse(path) or not stat.S_ISREG(path.lstat().st_mode):
+            raise PatchUnsafe("unsafe_patch_artifact")
+        path.unlink()
+
+
 def collect_patch(
     prepared: PreparedTask,
     source_write_scope: tuple[str, ...],
@@ -110,6 +135,7 @@ def collect_patch(
 ) -> PatchSummary:
     """Return a complete patch or a fixed unavailable reason, never a partial patch."""
     try:
+        _remove_previous_patch(prepared)
         if task_scratch_scope != ".mokioclaw/task-scratch/":
             raise PatchUnsafe("unsupported_scratch_scope")
         scope = _normalize_scope(source_write_scope)
@@ -131,6 +157,8 @@ def collect_patch(
                 continue
             if not _selected(relative, scope):
                 raise PatchUnsafe("change_outside_write_scope")
+            if (before and not before.endswith("\n")) or (after and not after.endswith("\n")):
+                raise PatchUnsafe("missing_final_newline")
             changed.append(relative)
             lines = list(difflib.unified_diff(
                 before.splitlines(keepends=True), after.splitlines(keepends=True),
@@ -142,6 +170,8 @@ def collect_patch(
             if sum(len(chunk.encode("utf-8")) for chunk in chunks) > MAX_PATCH_BYTES:
                 raise PatchUnsafe("patch_too_large")
         payload = "".join(chunks).encode("utf-8")
+        if _SUSPECTED_SECRET.search(payload):
+            raise PatchUnsafe("suspected_secret")
         path = _publish(prepared, payload) if changed else None
         return PatchSummary("available", tuple(changed), added, deleted, path)
     except (OSError, ValueError, TaskFilesystemError) as exc:

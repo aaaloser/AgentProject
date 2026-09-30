@@ -55,8 +55,22 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
     def session() -> dict:
         return {
             "csrf_token": csrf_token, "task_available": service is not None,
-            "demo_available": service is not None and service.fake_runner is not None, "run_available": False,
+            "demo_available": service is not None and service.fake_runner is not None,
+            "run_available": service is not None and service.run_available(),
         }
+
+    @app.get("/api/tasks/{task_id}/run-policy")
+    def run_policy(task_id: str):
+        if service is None:
+            return task_error(503, "task_unavailable", "Local tasks are not enabled.")
+        if not _TASK_ID.fullmatch(task_id):
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        try:
+            return available().run_policy(task_id)
+        except KeyError:
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        except TaskConflict:
+            return task_error(409, "run_policy_unavailable", "The task is not ready for run review.")
 
     @app.post("/api/task-previews")
     async def preview(request: Request):
@@ -98,6 +112,19 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
         except KeyError:
             return task_error(404, "task_not_found", "The task is unavailable.")
 
+    @app.get("/api/tasks/{task_id}/result")
+    def get_result(task_id: str):
+        if service is None:
+            return task_error(503, "task_unavailable", "Local tasks are not enabled.")
+        if not _TASK_ID.fullmatch(task_id):
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        try:
+            return asdict(available().result(task_id))
+        except KeyError:
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        except TaskConflict:
+            return task_error(409, "result_unavailable", "The task result is not ready.")
+
     @app.get("/api/tasks/{task_id}/events")
     def events(task_id: str, after: int = 0):
         if service is None:
@@ -109,6 +136,44 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
         except KeyError:
             return task_error(404, "task_not_found", "The task is unavailable.")
         return {"task_id": task_id, "events": [asdict(event) for event in record.events if event.sequence > after][:100]}
+
+    @app.get("/api/tasks/{task_id}/approvals")
+    def pending_approvals(task_id: str):
+        if service is None:
+            return task_error(503, "task_unavailable", "Local tasks are not enabled.")
+        if not _TASK_ID.fullmatch(task_id):
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        try:
+            available().get(task_id)
+            pending = available().pending_approvals(task_id)
+        except KeyError:
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        return {"task_id": task_id, "approvals": pending}
+
+    @app.post("/api/tasks/{task_id}/approvals/{request_id}")
+    async def decide_approval(task_id: str, request_id: str, request: Request):
+        if service is None:
+            return task_error(503, "task_unavailable", "Local tasks are not enabled.")
+        if not _TASK_ID.fullmatch(task_id) or not _TASK_ID.fullmatch(request_id):
+            return task_error(404, "task_not_found", "The approval is unavailable.")
+        try:
+            payload = await _body(request, frozenset({"attempt_id", "execution_digest", "approved"}))
+        except InvalidTaskRequest:
+            return task_error(400, "invalid_approval", "The approval decision is invalid.")
+        attempt = payload["attempt_id"]
+        digest = payload["execution_digest"]
+        approved = payload["approved"]
+        if (type(attempt) is not int or attempt < 1 or attempt > 3
+                or type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                or type(approved) is not bool):
+            return task_error(400, "invalid_approval", "The approval decision is invalid.")
+        try:
+            accepted = available().decide_approval(task_id, attempt, request_id, digest, approved)
+        except KeyError:
+            return task_error(404, "task_not_found", "The approval is unavailable.")
+        if not accepted:
+            return task_error(409, "approval_stale", "The approval is no longer pending.")
+        return {"accepted": True}
 
     @app.post("/api/tasks/{task_id}/run")
     async def run(task_id: str, request: Request):
@@ -123,7 +188,31 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
             return task_error(404, "task_not_found", "The task is unavailable.")
         if available().store.has_active_task(exclude_task_id=task_id):
             return task_error(409, "task_busy", "Another task is active; try again later.", True)
-        return task_error(503, "run_unavailable", "Agent execution is not enabled.")
+        if not available().run_available():
+            return task_error(503, "run_unavailable", "Agent execution is not ready.")
+        try:
+            started = available().start_agent(task_id)
+        except TaskConflict:
+            return task_error(409, "task_conflict", "The task cannot start now.")
+        return JSONResponse(status_code=202, content=_record(started))
+
+    @app.post("/api/tasks/{task_id}/cancel")
+    async def cancel(task_id: str, request: Request):
+        if service is None or service.worker_controller is None:
+            return task_error(503, "run_unavailable", "Agent execution is not enabled.")
+        try:
+            await _body(request, frozenset())
+        except InvalidTaskRequest:
+            return task_error(400, "invalid_cancel", "The cancellation request is invalid.")
+        if not _TASK_ID.fullmatch(task_id):
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        try:
+            record = available().cancel_agent(task_id)
+        except KeyError:
+            return task_error(404, "task_not_found", "The task is unavailable.")
+        except TaskConflict:
+            return task_error(409, "task_conflict", "The task cannot be cancelled now.")
+        return JSONResponse(status_code=202, content=_record(record))
 
     @app.post("/api/tasks/{task_id}/demo-run")
     async def demo_run(task_id: str, request: Request):

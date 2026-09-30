@@ -158,10 +158,12 @@
 
 **Interfaces:** `IsolatedCommandExecutor.run(...)` 只挂载 work 目录，镜像固定 digest；`TaskWorkerController.start(task_id) -> None`、`cancel(task_id) -> None`、`reconcile() -> None`。worker 以 `subprocess.Popen` 的显式筛选环境启动，使用仅回环、随机令牌的有界 JSON IPC；最多一个活跃任务。worker 身份使用 PID 加创建身份，每个容器记录固定命名空间下的 `instance_id/task_id/command_request_id` label 和名称。
 
-- [ ] 写失败测试：Docker 参数无来源、baseline、home、socket、provider 凭据挂载，Task A 容器不能挂 Task B work，含 `--network none`、资源限制、只读根与非特权用户；不可用 Docker 时 run 拒绝；两个并发 run 恰有一个 worker，run/cancel、approval/cancel、超时/完成竞态按同一任务锁处理；取消、超时、worker 崩溃先停止匹配 worker 再清理**全部**归属容器，完成前也须清理；worker 已退出但容器仍存活时继续发现并移除；残留容器或无法确认移除时保持 `cleanup_failed` 且不能启动第二任务；重启 reconcile 仅处理身份匹配的旧实例资源，不触碰其它任务／无关容器；清理成功后才发布终态，迟到审批／事件与终态后 Agent 写 work 被拒绝。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败；此步只用假 Docker 命令，不启动真实容器。
-- [ ] 用 `apply_patch` 实现执行器与控制器；worker 不读取 `.env`，不继承全量环境，IPC 只接收经校验的任务指令和投影事件。封禁后台命令；输出限长；命令前后及有界周期检查 work 软上限，超限记 `workspace_limit_exceeded` 并清理；Docker 的 CPU／内存限制不得被记录为磁盘硬配额。
-- [ ] 新 `--basetemp` 重跑；在获得另行授权的本机 Docker 测试环境前，只报告参数级与假进程证据，不宣称实际容器隔离已验收。
+- [x] 写失败测试：Docker 参数无来源、baseline、home、socket、provider 凭据挂载，Task A 容器不能挂 Task B work，含 `--network none`、资源限制、只读根与非特权用户；不可用 Docker 时 run 拒绝；两个并发 run 恰有一个 worker，run/cancel、approval/cancel、超时/完成竞态按同一任务锁处理；取消、超时、worker 崩溃先停止匹配 worker 再清理**全部**归属容器，完成前也须清理；worker 已退出但容器仍存活时继续发现并移除；残留容器或无法确认移除时保持 `cleanup_failed` 且不能启动第二任务；重启 reconcile 仅处理身份匹配的旧实例资源，不触碰其它任务／无关容器；清理成功后才发布终态，迟到审批／事件与终态后 Agent 写 work 被拒绝。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败；此步只用假 Docker 命令，不启动真实容器。
+- [x] 用 `apply_patch` 实现执行器与控制器；worker 不读取 `.env`，不继承全量环境，IPC 只接收经校验的任务指令和投影事件。封禁后台命令；输出限长；命令前后及有界周期检查 work 软上限，超限记 `workspace_limit_exceeded` 并清理；Docker 的 CPU／内存限制不得被记录为磁盘硬配额。
+- [x] 新 `--basetemp` 重跑；实际容器门在用户另行授权后按 Task 7.5 完成，详情见进度 §37。
+
+  2026-09-29 补记：参数级 Docker 假执行、精确 label 清理、单 worker 竞争／取消／重启、回环 worker 生命周期和创建期间取消竞态测试均通过；worker 使用 `-P` 避免任务副本中的同名 Python 包抢先加载。执行器、控制器现已连接内部任务服务；实际 Docker 隔离门获单独授权后的结果见 Task 7.5，真实 Agent `/run` 仍关闭。
 
 ## Phase B3.5 — 真实 Docker、无 provider 沙箱门
 
@@ -171,9 +173,11 @@
 
 **Interfaces:** 使用 Task 7 的 `IsolatedCommandExecutor` 与 `TaskWorkerController`；此门只接临时仓库、测试镜像和假任务，绝不创建 provider 或真实 Agent 调用。没有本机 Docker 测试授权时保留未通过状态，不以 mock 结果替代。
 
-- [ ] 写可选择运行的验收测试：实际容器只见 work，来源、baseline、home、Docker socket 和 provider 环境不可见；network none 阻断网络，非特权、只读根、CPU／内存／PID 与输出限制生效；取消／超时后容器停止移除，遗留容器可按精确 label reconcile；无关容器不受影响，来源与 ignored 夹具前后不变。
-- [ ] 获得单独 Docker 测试授权后，用指定 Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 运行此测试并记录实际镜像 digest、通过项和限制；未获授权时不运行 Docker，明确标记该门未通过。
-- [ ] 根据实际结果修复边界问题并重验；所有权与清理不通过时维持真实运行能力关闭。
+- [x] 写可选择运行的验收测试：实际容器只见 work，来源、baseline、home、Docker socket 和 provider 环境不可见；network none 阻断网络，非特权、只读根、CPU／内存／PID 与输出限制生效；取消／超时后容器停止移除，遗留容器可按精确 label reconcile；无关容器不受影响，来源与 ignored 夹具前后不变。
+- [x] 获得单独 Docker 测试授权后，用指定 Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 运行此测试并记录实际镜像 digest、通过项和限制；未获授权时不运行 Docker，明确标记该门未通过。
+- [x] 根据实际结果修复边界问题并重验；所有权与清理不通过时维持真实运行能力关闭。
+
+  2026-09-28 B3.5 验收：用户明确授权后，用本机已有 `sha256:c9f6b3d0c618a75614fe5814e9ff9219d712f0e8a46c517dd6ef2650f9f31632` Linux 测试镜像运行四项独立实际容器测试，**4 passed**。首次实测发现镜像自带 entrypoint 使命令空运行；RED→GREEN 后执行器显式指定 `/bin/sh`，再通过仅 work 挂载、网络关闭、非特权、只读根、CPU／内存／PID、输出截断、来源与 ignored 字节不变、超时清理、取消与重启精确清理及无关容器保留。无 provider、无真实 Agent，`/run` 仍关闭；该门不代表 B4 或真实试点已通过。
 
 ## Phase B4 — 完整工作流接入与审阅证据
 
@@ -183,10 +187,10 @@
 
 **Interfaces:** `ProviderSettings` 只取 `MOKIO_TASK_API_KEY/MOKIO_TASK_MODEL/MOKIO_TASK_BASE_URL` 三项显式环境；`TaskRunContext` 注入显式模型工厂、累计 provider 用量账本及 `allow_web_search=False/trace_mode="off"/checkpoint_mode="off"`。旧 CLI/TUI 入口默认行为不变。
 
-- [ ] 写失败测试：缺任一必需任务设置时零 provider 调用；请求数阈值、累计已报告 token 阈值或用量缺失时下一次调用前停止；`max_output_tokens_per_call` 实际进入模型请求；最后一次可能越限如实记录；任务上下文不读 `.env`／旧变量，含 API key／URL query 的 provider 异常被脱敏，凭据不进入命令容器、JSON、日志或事件；旧入口回归不变。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 实现显式设置与预算；不以 token 上限承诺固定金额。
-- [ ] 新 `--basetemp` 重跑，审阅任务路径上每个 `create_model()` 调用点。
+- [x] 写失败测试：缺任一必需任务设置时零 provider 调用；请求数阈值、累计已报告 token 阈值或用量缺失时下一次调用前停止；`max_output_tokens_per_call` 实际进入模型请求；最后一次可能越限如实记录；任务上下文不读 `.env`／旧变量，含 API key／URL query 的 provider 异常被脱敏，凭据不进入命令容器、JSON、日志或事件；旧入口回归不变。此项的端到端事件／JSON 证明仍归 Task 8D，当前只验证配置、worker 环境、异常和既有容器环境边界。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+- [x] 用 `apply_patch` 实现显式设置与预算；不以 token 上限承诺固定金额。
+- [x] 新 `--basetemp` 重跑，审阅任务路径上每个 `create_model()` 调用点。直接调用点已列入 Task 8C 接入清单；当前 `/run` 仍关闭。
 
 ### Task 8B: 宿主文件工具统一接入
 
@@ -194,10 +198,10 @@
 
 **Interfaces:** Task 3B 的 `TaskFilesystem` 是 Web Task FileRead/FileWrite/FileEdit/Grep/Search/Notepad 和上下文枚举的唯一文件访问入口；普通 CLI/TUI 工具路径维持原行为。
 
-- [ ] 写失败测试：read/write/scratch 各只访问对应 scope；绝对路径、`..`、跨任务、baseline/来源、链接与 junction、rename/delete/递归 search 越界均拒绝；命令后把目录改成链接再调用宿主工具仍拒绝；旧工具测试不受影响。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-  - [ ] 用 `apply_patch` 让 Web Task 使用单独任务工具注册表，全部文件操作接到同一 `TaskFilesystem`；旧 Grep 与工具文件保持原字节。无法可靠无竞态打开的操作 fail closed。
-- [ ] 新 `--basetemp` 重跑并逐项审阅工具注册表，确认不存在绕过入口。
+- [x] 写失败测试：read/write/scratch 各只访问对应 scope；绝对路径、`..`、跨任务、baseline/来源、链接与 junction、rename/delete/递归 search 越界均拒绝；命令后把目录改成链接再调用宿主工具仍拒绝；旧工具测试不受影响。Windows 不支持的创建／遍历等操作明确 fail closed。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+  - [x] 用 `apply_patch` 让 Web Task 使用单独任务工具注册表，全部文件操作接到同一 `TaskFilesystem`；旧 Grep 与工具文件保持原字节。无法可靠无竞态打开的操作 fail closed。
+- [x] 新 `--basetemp` 重跑并逐项审阅工具注册表，确认不存在绕过入口。任务模式的 memory/TODO 路径与 CodeAgent 工具回退同时受控；worker 接入仍属于 Task 8D。
 
 ### Task 8C: 图节点与命令网关注入
 
@@ -205,10 +209,10 @@
 
 **Interfaces:** `stream_agent_events(..., task_context: TaskRunContext | None = None)` 保持旧调用兼容；task_context 将 Task 8A 的模型工厂、Task 8B 的文件工具、Task 6 的 `TaskCommandGateway` 注入所有 planner/CodeAgent/verifier 节点。
 
-- [ ] 写失败测试：假模型遍历 entry→planner→CodeAgent→verifier，每个节点均使用注入模型；模型生成命令及验证命令均经网关审批，无直接主机 `CommandExecutor.run()`／`shell=True`；attempt 切换条件仅为明确 verifier 失败，旧批准失效且 work 继承；provider／工具／拒绝／超时不自动重试。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 接入上下文与 attempt 规则，不改变旧 CLI/TUI 默认入口。
-- [ ] 新 `--basetemp` 重跑，并代码审阅全部直接 `create_model()`、`CommandExecutor.run()` 调用点。
+- [x] 写失败测试：假模型遍历 entry→planner→CodeAgent→verifier，每个节点均使用注入模型；模型生成命令及验证命令均经网关审批，无直接主机 `CommandExecutor.run()`／`shell=True`；attempt 切换条件仅为明确 verifier 失败，旧批准失效且 work 继承；provider／工具／拒绝／超时不自动重试。审批／超时网关独立测试与完整假图测试分开；完整图使用假网关，不宣称真实 Docker 或 provider。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+- [x] 用 `apply_patch` 接入上下文与 attempt 规则，不改变旧 CLI/TUI 默认入口。
+- [x] 新 `--basetemp` 重跑，并代码审阅全部直接 `create_model()`、`CommandExecutor.run()` 调用点。旧 searchAgent 与冻结 architectures 不在 Web Task 图路由中，`allow_web_search=False`；真实 worker 尚未启用。
 
 ### Task 8D: 完整假 provider 工作流
 
@@ -216,10 +220,12 @@
 
 **Interfaces:** `TaskWorkerController.start(task_id)` 使用 Task 8C 的完整图而非单独 `run_code_agent()`；只接假 provider／假容器完成端到端验收，worker 向服务发送经白名单投影的 `PublicTaskEvent`。
 
-- [ ] 写失败测试：完整 entry→planner→CodeAgent→verifier 的两次 attempt、验证失败后沿用 work、批准按 attempt 作废、预算跨 attempt 累计；原始 prompt/response、凭据、trace/checkpoint 不落盘；provider、工具、审批、取消和总超时各自正确停止且不自动重试。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 串接完整工作流与投影，保留旧 `stream_agent_events` 行为。
-- [ ] 新 `--basetemp` 重跑，并对照图节点清单核实没有真实 provider 调用。
+- [x] 写失败测试：完整 entry→planner→CodeAgent→verifier 的两次 attempt、验证失败后沿用 work、批准按 attempt 作废、预算跨 attempt 累计；原始 prompt/response、凭据、trace/checkpoint 不落盘；provider、工具、审批、取消和总超时各自正确停止且不自动重试。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+- [x] 用 `apply_patch` 串接完整工作流与投影，保留旧 `stream_agent_events` 行为。
+- [x] 新 `--basetemp` 重跑，并对照图节点清单核实没有真实 provider 调用。
+
+  2026-09-29 假工作流验收：内部启动桥使用已保存的固定规格连接 worker、命令网关和执行器；完整假图的两次 attempt 经投影验证，服务接收回环命令、attempt 与固定失败类别。审批、关闭时撤销待决请求、取消和总时限均有独立假进程测试；私有 `spec.json` 重启后恢复固定范围与预算，父进程只持久化非文本执行回执。无真实 provider 调用或 Agent 任务；`/run` 与 `run_available` 保持关闭，真实试点仍属于 Task 10。
 
 ### Task 9: 结果、验证与边界验收
 
@@ -227,10 +233,10 @@
 
 **Interfaces:** `TaskResult` 含 `base_sha/status/failure_kind/changed_files/patch_summary/verification_results/limitations`；每条验证记录含确切命令、批准 ID、退出码、时长、通过／失败／未运行与脱敏／截断标志。完整补丁只保留在任务本地受限产物，不设网页下载或来源应用接口。
 
-- [ ] 写失败测试：无补丁、修改／新增／删除、二进制、无效 UTF-8、symlink、疑似秘密、超限 work 各有正确摘要或 `patch_unavailable`，不输出半截内容；`completed + verification_failed`、`cancelled + partial evidence`、provider 失败、工具失败和补丁失败分别记账；每条验证结果绑定实际命令与批准 ID、退出码和耗时；HTML／控制字符安全处理；两仓库任务互不串用。端到端夹具比较来源 HEAD、refs、index、状态及 ignored 文件字节前后相同。
-- [ ] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
-- [ ] 用 `apply_patch` 完成结果页与文档；说明 `--task-root` 中私有 baseline/work/完整补丁无限期留存且启动者负责清理、避免同步盘／公开目录、源码范围、审批、Docker 能力门、真实试点授权、截图隐私和“任务完成／验证通过”的区别。修正上次审阅发现的 `.gitignore` 放行描述与实际不一致之处。
-- [ ] 新 `--basetemp` 重跑定向及全项目 pytest；运行 Ruff、`git diff --check`、目标文本秘密格式扫描、Rich 三份冻结哈希及最终比较文件只读核对。记录真实数字与 Windows skip；若 Docker 权限不足，标明未通过实际容器门。
+- [x] 写失败测试：无补丁、修改／新增／删除、二进制、无效 UTF-8、symlink、疑似秘密、超限 work 各有正确摘要或 `patch_unavailable`，不输出半截内容；`completed + verification_failed`、`cancelled + partial evidence`、provider 失败、工具失败和补丁失败分别记账；每条验证结果绑定实际命令与批准 ID、退出码和耗时；HTML／控制字符安全处理；两仓库任务互不串用。端到端夹具比较来源 HEAD、refs、index、状态及 ignored 文件字节前后相同。
+- [x] 用指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 运行目标测试，确认失败。
+- [x] 用 `apply_patch` 完成结果页与文档；说明 `--task-root` 中私有 baseline/work/完整补丁无限期留存且启动者负责清理、避免同步盘／公开目录、源码范围、审批、Docker 能力门、真实试点授权、截图隐私和“任务完成／验证通过”的区别。修正上次审阅发现的 `.gitignore` 放行描述与实际不一致之处。
+- [x] 新 `--basetemp` 重跑定向及全项目 pytest；运行 Ruff、`git diff --check`、目标文本秘密格式扫描、Rich 三份冻结哈希及最终比较文件只读核对。最新结果为 699 passed、3 skipped、35 deselected；实际 Docker 门的已授权结果见 §37，本轮没有重跑。
 
 ## Phase B5 — 真实试点授权门（不由本计划自动启动）
 
@@ -240,9 +246,21 @@
 
 **Interfaces:** 用户须先指定仓库、base SHA、允许读取范围、provider／模型、预算、最多运行次数、验证命令和 Docker 镜像 digest。计划中的假测试通过不等于这项授权。
 
+2026-09-29 准备门补记：Task 9 后的实际代码仍固定关闭网页 `/run`，故 Task 10 先以假 provider／假 Docker 的失败再通过测试补上显式 CLI 启动、精确本机镜像检查、固定清单和二次运行确认；完整非 Docker 回归 **704 passed、3 skipped、35 deselected**。这属于真实试点的必要能力门，未调用 provider 或运行真实 Agent。用户仅授权继续 Task 10，尚未提供下列逐项固定试点参数，因此以下试点清单仍不勾选。
+
 - [ ] 先展示 B1–B4 及 B3.5 真实 Docker、无 provider 门的实际隔离、审批、脱敏和全项目验证证据；缺任一门则保持真实运行按钮关闭。
 - [ ] 获得上述逐项明确授权后，才运行一次限定试点；记录 base SHA、任务 ID、实际命令批准、补丁与验证摘要、provider／工具／测试失败类别和来源前后不变证明。
 - [ ] 如实报告真实结果；不补跑 Rich/Click 正式槽位，不提交、push、回写来源或创建 PR，除非用户分别明确指示。
+
+2026-09-29 试点追记：用户随后确认固定仓库、完整 base SHA、五项读写路径、三个修复目标、`qwen3.5-flash`、本地镜像 digest、一次运行和具体预算。网页任务 `ZCiH-d68Fyuqjh8xeseDT1tF` 实际运行一次，获批的文件列表命令退出码为 0，随后以 `task_tool_failed` 结束；0 个补丁文件，固定验证未运行。详见[实施进度第 41 节](../../TECHNICAL_IMPLEMENTATION_PROGRESS.md)。这次试点没有完成三个修复目标，已用尽获准的一次真实运行；后续真实重试需要新的逐项授权。上述清单保留未勾选状态，避免把失败试点误记为阶段 B 验收通过。
+
+2026-09-29 无 provider 修复追记：任务版 `GrepTool` 的 `path` 已改为工具 schema 必填，显式单文件范围和拒绝边界保持；先 RED 后 GREEN 的定向测试及全项目非 Docker 回归通过，详见[实施进度第 42 节](../../TECHNICAL_IMPLEMENTATION_PROGRESS.md)。这不能证明第 41 节试点的具体失败调用，也不恢复已用尽的真实运行额度。
+
+2026-09-29 后续试点追记：用户另行授权的两次独立运行已全部使用。第 1 次因单条命令审批在 120 秒内未完成，以 `task_tool_failed` 结束，执行回执为 0；第 2 次的三条命令分别获批并退出码 0，随后以 `provider_failed` 结束。两次补丁均为 0、固定验证均未运行，来源与 Docker 清理核对见[实施进度第 43 节](../../TECHNICAL_IMPLEMENTATION_PROGRESS.md)。不能把这两次记为三个修复目标通过；后续先调查页面任务恢复与审批可见性，任何新真实运行须重新授权。
+
+2026-09-29 内置浏览器追记：页面任务 ID 恢复已做无 provider 回归；用户新授权的两次真实运行均从 Codex 内置浏览器启动。第 1 次在入口阶段以 `task_tool_failed` 结束。随后经用户确认，将任务版 `TodoWriteTool` 的验证清单固定为任务创建时已确认的命令，允许模型省略或传空列表，普通 CLI/TUI 不变；无 provider 回归通过。第 2 次仍在入口阶段以 `task_tool_failed` 结束，无法据公开事件确定具体失败工具。两次均无补丁和固定验证结果；详见[实施进度第 44–45 节](../../TECHNICAL_IMPLEMENTATION_PROGRESS.md)。新真实运行须再获授权，B5 保持未通过。
+
+2026-09-29 后续无 provider 排障：经用户审阅简短设计，新增终止性任务工具失败的固定工具身份／受控类别投影，并在创建新任务开始时清空旧任务页面状态与运行清单；假模型和页面脚本负责验证事件脱敏、内层失败身份、旧轮询失效及新任务身份。此改动不重新解释第 44–45 节失败，更不恢复已用尽的真实运行额度。实际测试结果见实施进度后续章节。
 
 ## Execution Handoff
 

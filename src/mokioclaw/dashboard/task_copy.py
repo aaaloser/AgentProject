@@ -166,6 +166,9 @@ def prepare_task(
             parts = entry.relative_path.split("/")
             _write_regular(baseline.joinpath(*parts), content)
             _write_regular(work.joinpath(*parts), content)
+        scratch = work / ".mokioclaw" / "task-scratch"
+        _write_regular(scratch / "NOTEPAD.md", b"")
+        _write_regular(scratch / "HISTORY_SUMMARY.md", b"")
         after = _source_observation(source_root, reader)
         if source_identity(source_root) != preview.source_identity:
             raise InvalidTaskPreparation("Source repository identity changed")

@@ -1871,3 +1871,223 @@ Rich 冻结 `thresholds.json`、`per-case.json`、`pooled.json` 的本轮只读 
 ### 36.3 交付边界
 
 README 首页与 `docs/MOKIOCLAW_LOCAL_DASHBOARD_DEMO.md` 现在给出双仓库启动、`--no-browser`、指定 Python 环境备用命令、停止方式、四种优先级、临时夹具演示、截图隐私和故障排查。`.gitignore` 对演示、交接及已起草的工作台设计／计划文档使用精确放行规则；其他 ignored 评测证据仍在原位。工作在当前 `main` checkout 保持未提交；本阶段没有 commit、push、远端写入、真实 Agent run、provider 调用或正式槽位补跑。本地核心已完成本轮验收；GitHub 账户接入与 Agent 修复仍需后续单独设计与授权。
+
+---
+
+## 37. 2026-09-28 阶段 B3.5 无 provider 实际 Docker 沙箱验收
+
+用户另行明确授权本机 Docker 验收后，在 `codex/mokioclaw-stage-b` 独立工作树使用临时 Git 仓库和本机已有 Linux 测试镜像 `sha256:c9f6b3d0c618a75614fe5814e9ff9219d712f0e8a46c517dd6ef2650f9f31632`。测试未调用 provider、未启动真实 Agent，也未运行 Rich/Click 正式槽位。`tests/dashboard/test_task_docker_acceptance.py` 只在显式提供 `MOKIO_TASK_DOCKER_TEST_IMAGE` 且选择 Docker 标记时运行；本轮指定 Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 的四项实际测试为 **4 passed**。
+
+首次容器测试返回退出码 0 却没有执行检查语句。只读镜像检查发现其预置 `Entrypoint=["/bin/sh","-lc"]`；执行器原先在镜像名之后追加 `/bin/sh -c`，被当作入口参数。新增失败测试后，固定 `docker create --entrypoint /bin/sh <digest> -c <command>`，参数级及实际容器测试均通过。这次实测说明仅靠假 Docker 参数测试不能证明命令确实运行。
+
+实测覆盖：容器仅挂载任务 `work`；固定 `network=none`，对外连接失败；容器内 UID/GID 为 `65534:65534`；Docker `HostConfig` 显示只读根、非特权、1 CPU、512 MiB 内存、64 PID；来源、baseline、ignored 文件、Docker socket、用户 Docker 配置和测试用 provider 环境变量均不可见。容器只在 work 写出测试文件，输出按上限截断。临时来源仓库的 HEAD、refs、index、工作树状态及 ignored 夹具 SHA-256 在执行前后相同。超时后归属容器移除；取消与重启 reconcile 只清理匹配 instance/task 标签的容器，另一只无关测试容器保留。验收后只读列表确认本轮测试容器无残留。
+
+此门仅证明上述固定镜像与本机 Docker 环境的无 provider 命令隔离。任务 worker 当前仍是无 Agent 的生命周期骨架，网页 `/run` 继续关闭；Task 3B 的部分 Windows 宿主文件操作仍 fail closed，B4 的 provider、文件工具与完整图接入未完成。work 的周期扫描是软上限，不能作为磁盘硬配额；真实试点仍需独立授权。
+
+代码修正后的全项目非 Docker 回归为 **610 passed、3 skipped、35 deselected、0 failed**（3 项 skip 均为 Windows symlink 能力限制；35 项 deselected 包含本轮新增的 4 项 opt-in Docker 测试）。实际 Docker 验收另行为 **4 passed**。未将两组测试合并冒充真实 Agent 验收。
+
+---
+
+## 38. 2026-09-28 阶段 B4 假 provider 配置与文件工具边界（进行中）
+
+Task 8A 新增任务专用 `ProviderSettings`，只从显式 `MOKIO_TASK_API_KEY/MOKIO_TASK_MODEL/MOKIO_TASK_BASE_URL` 读取，不装载 `.env`、不回退旧变量；构造异常只保留固定错误类别。`TaskRunContext` 使用同一预算账本跨绑定模型计数，限制请求数、已报告累计 token 和单次输出 token；用量缺失时阻止下一次请求，最后一次可能超过累计阈值则如实记录。worker 仅在显式收到设置时注入这三项，命令容器仍无 provider 环境。旧 `create_model()` 入口未改变。定向假模型、旧 provider 与 worker 测试 **27 passed**；无真实 provider 请求。
+
+Task 8B 已建立 `TaskFilesystem` 专用文件工具注册表，现有文件的读／写／唯一片段编辑、显式单文件字面搜索、scratch 记事本均由同一范围检查处理；越界路径、Windows junction 替换、旧工具回退会拒绝。任务图的记忆读取转向 scratch，TODO 在任务模式仅保留内存，不写工作目录根文件。Windows 上安全创建、重命名、删除、递归遍历仍 fail closed，因而这些功能尚不可用于真实任务。图节点与命令网关的接入进展见 §38.1；网页 `/run` 保持关闭。
+
+本阶段一次全项目非 Docker 回归为 **634 passed、3 skipped、35 deselected、0 failed**，1 条 Starlette TestClient 弃用警告；3 项 skip 仍为 Windows symlink 能力限制。随后补充 TODO 绕过防护的定向回归 **92 passed**，Ruff `--no-cache` 与 `git diff --check` 通过。图节点审阅确认旧直接模型创建及验证工具注册点仍需 Task 8C 逐一注入；本记录不宣称完整工作流、真实 Agent 或 provider 已通过。
+
+### 38.1 B4 图适配与 worker 投影进展
+
+Task 8C 已用显式 `TaskRunContext` 接入 entry、planner、CodeAgent、verifier 和上下文压缩模型；任务 `create_runtime` 固定关闭 web search、原始 trace/checkpoint，跳过旧 `.env` 装载。CodeAgent／verifier 使用任务专用文件工具与同一命令网关；固定验证命令来自任务创建时的清单，记录实际命令、请求 ID、退出码和耗时。无命令证据时不把模型声称的“通过”记成验证通过。只有 verifier 明确返回失败才能进入下一 attempt，网关随之作废旧批准并沿用当前 work。假模型完整 entry→planner→CodeAgent→verifier 两次 attempt 测试通过；provider、工具或审批异常不沿该重试路线继续。旧 CLI/TUI 的无 `task_context` 路径保持默认行为，冻结工具与 graph 架构文件未改动。
+
+Task 8D 已把任务专用配置、文件工具、完整图入口与 worker 的回环消息接起。worker 在发送前将原始图事件投影为白名单摘要，服务再次核对任务实例、attempt、事件类别和序号；prompt、response、完整输出、provider 字段和私有路径不进入事件。最后一次 provider 响应缺用量时不会先发“完成”。父进程保存命令策略、审批和 Docker 执行权；worker 只发送请求并等待返回。人工审批等待使用无固定 5 秒超时的已认证 socket，命令输出上限的最坏 JSON 转义仍可在有界通道内传送。`ApprovalBroker` 通知服务后，待决命令的完整文本及规范摘要可在本地 API 审阅；决定只接受当前 task／attempt／request/digest 的单次批准或拒绝。失败通过固定类别回传，不转发异常原文。配置能力构造测试证明这一步没有创建 provider 模型或接触 Docker。
+
+上述是真实 worker 接线的无 provider 假注入测试，**不是**真实 Agent 的端到端验收。后续用假 worker 验证总时限会先停止 worker、确认资源清理，再发布 `timed_out`；已准备任务可通过受保护 API 取消且不接触 Docker。重启恢复测试确认私有 `spec.json` 仅在请求摘要与任务身份一致时恢复固定范围和预算；公开 `record.json` 不含描述或验证命令。真实运行的启动能力门、结果收集和网页审阅尚需补齐；`/run` 与 `run_available` 继续固定关闭。未调用 provider、未运行真实 Agent、未提交或 push 本工作树。本轮指定 Python、显式 `PYTHONPATH=src`、新 `--basetemp` 的全项目非 Docker 回归为 **672 passed、3 skipped、35 deselected、0 failed**，1 条已知 Starlette 警告；3 项 skip 均为 Windows symlink 创建能力限制。Ruff `--no-cache` 与 `git diff --check` 通过。B4 尚未到完整验收门。
+
+---
+
+## 39. 2026-09-29 阶段 B4 假工作流与结果审阅补齐
+
+本轮在独立 `codex/mokioclaw-stage-b` 工作树补上内部 `start_agent` 启动桥，连接已保存的固定任务规格、worker、命令网关与受限执行器；页面 `/run` 和 `run_available` 仍关闭，未调用 provider、未启动真实 Agent。假模型完整图的两次 attempt 现在同时经过 worker 投影测试，固定验证事件仅带经核对的命令序号、审批请求 ID、实际退出码、耗时和输出截断标志。父进程在审批后、命令实际执行完毕时保存只含规范请求摘要、命令 SHA-256、退出码、耗时和截断标志的回执；公开结果必须将固定命令、批准记录、唯一执行回执和投影事件逐项匹配才认可通过。一份回执不能重复满足两条相同的固定命令；模型自述、孤立或篡改的事件不算证据。
+
+Task 9 的只读 `/api/tasks/{id}/result` 分开展示任务状态、失败类别、补丁摘要与每条固定命令的验证结果。网页使用文本节点和控制字符可见转义，展示待批命令与单次批准／拒绝操作；真实运行按钮保持关闭。补丁收集拒绝超范围、链接、二进制、无效 UTF-8、超限和疑似秘密内容，失败时清除旧补丁，完整 `patch.diff` 只在私有任务根保存、不提供下载或回写路由。结果首次读取后以私有 `result.json` 固定，重启后沿用与任务记录序号、请求摘要一致的快照；本机用户后来修改 work 不会改写已展示的摘要。`--task-root` 中的 baseline、work、结果和完整补丁不自动删除，需启动者自行保管与清理。
+
+两个临时来源仓库的无 provider 夹具分别准备固定提交副本并修改各自 work；来源 HEAD、refs、index、含 ignored 项的状态、普通源码和 ignored 夹具字节在前后相同。代码审阅指出命令容器创建与取消清理之间的竞态、关闭服务时审批等待可能持续到超时、验证事件缺少父进程执行证明、无末尾换行的补丁和大量空目录的边界；已分别用控制器创建锁、关闭前撤销审批并清理、持久执行回执、补丁 fail closed 与目录计数上限修复，新增针对性失败再通过测试。工作台显示完整 base SHA、当前 HEAD、来源脏状态及所有阻断路径，`cleanup_failed` 仍属未完成清理，不开放结果快照。
+
+第二轮只读复核又指出越界序号的重复验证事件可复用一次批准回执，以及目录上限在入队后才检查的问题；分别补失败用例，改为所有同请求 ID 的验证事件计数和发现目录时立即计数，随后定向与完整回归通过。最终全项目非 Docker 回归使用指定 Windows Python、显式 `PYTHONPATH=src` 和新 `--basetemp`，结果为 **699 passed、3 skipped、35 deselected、0 failed**，耗时 219.93 秒；3 项 skip 均为 Windows 符号链接能力限制，另有一条既有 TestClient 弃用警告。Ruff `--no-cache src tests`、JavaScript 语法检查与 `git diff --check` 通过；目标源码、测试和文档的秘密格式文件名扫描没有命中。Rich 三份冻结分析与最终 Rich–Click 比较四份文件的只读 SHA-256 与第 36 节一致，未修改冻结工具、图架构或工作流文件。Task 8D、9 的**假 provider／无真实 Agent**验收据此通过；此前 **684 passed** 和 **697 passed** 都只是修复前检查点。真实运行按钮仍关闭，B5 真实试点没有授权也未执行。本轮没有重跑正式槽位或 Docker 实测，没有提交、push 或远端写入。
+
+---
+
+## 40. 2026-09-29 Task 10 真实试点准备门（等待固定参数）
+
+用户已同意继续 Task 10，但尚未指定计划所需的试点仓库、完整 base SHA、读取范围、具体任务、provider／模型、运行次数、请求与 token 预算、固定验证命令和 Docker 镜像 digest。本节只记录不调用 provider 的准备工作；真实 Agent 任务、命令容器和试点结果尚未产生。
+
+Task 9 验收后审阅发现启动桥虽存在，CLI 尚不能显式启用真实任务，网页 `/run` 和 `run_available` 一直固定关闭。为使 Task 10 的授权门可实际核对，本轮补充 `--enable-agent`、`--task-root`、固定 `--task-image sha256:<64 hex>` 的组合校验；任务专用 provider 只从三项显式进程环境配置，不读取 `.env`。服务在开始 worker 前检查本机镜像精确 digest，不可用时拒绝；只读运行清单展示固定提交、读写范围、模型、镜像、无网络、预算和验证命令，不展示凭据或完整 provider URL。页面只有在能力门开放、任务已准备且清单身份与当前仓库／提交一致时才显示真实运行确认操作；运行确认与每条命令审批彼此独立。默认无 provider 状态演示保留。
+
+定向测试以假 Docker 和假 provider 覆盖镜像拒绝／可用、固定清单无凭据、启动路由、CLI 参数以及页面控制；没有建立真实模型。全项目非 Docker 回归使用指定 Windows Python、显式 `PYTHONPATH=src`、独立系统临时 `--basetemp`，结果为 **704 passed、3 skipped、35 deselected、0 failed**，耗时 160.47 秒；3 项 skip 为既有 Windows 符号链接限制。初次回归中旧内部启动测试因新增镜像门失败，现该测试显式模拟已通过门，并由独立测试证明门拒绝逻辑；另一次因 `--basetemp` 名含 `baseline` 与既有断言冲突，改用中性名称后通过。实际 Docker B3.5 的四项通过证据仍为第 37 节的历史结果，本轮未重跑；也未补跑正式槽位、提交、push 或写远端。真实试点仍需用户补齐逐项参数后才能开始。
+
+---
+
+## 41. 2026-09-29 Task 10 单次真实试点结果
+
+用户随后确认了逐项参数：来源为 `D:\agent work\project\MokioAgent` 的固定提交 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`，读取与写入范围为 `pyproject.toml`、`src/mokioclaw/__init__.py`、`src/mokioclaw/core/`、`src/mokioclaw/tools/`、`tests/`；目标是修复 grep 的符号链接越界、正则校验与读取上限，以及 Bash 输出的内存和落盘上限。任务根为 `D:\agent work\project\MokioAgent-task10-private`，模型标识为 `qwen3.5-flash`，本机镜像固定为 `sha256:83ff408c0f9ce6007afbc9b468815ae4fbdde79d7a702e4b7eb5ee21c91a72b2`。上限为 1 次运行／1 次尝试、1200 秒、16 次 provider 请求、30000 总 token 和单次输出 3072 token。启动者在同一 PowerShell 进程显式设置任务专用 provider 环境变量；工作台没有读取或复制 `.env` 值。
+
+试点前从该固定提交预览并复制了 27 个文件、179494 字节，阻断路径为 0；复制前后来源观察一致。无 provider 的实际 Docker 预检重新运行 B3.5 四项测试，结果 **4 passed**。固定来源副本在同一本机镜像中的 `tests/test_tools.py` 全量基线为 **41 passed、2 failed**，失败是 `test_bash_prefers_runtime_python_on_path` 与 `test_bash_env_file_expands_existing_variables`；排除这两项后的预检为 **41 passed、2 deselected**。试点固定验证命令采用该已通过子集，并要求新增针对三个目标的回归测试；排除项不得被视为已修复。
+
+网页创建的真实任务 ID 为 `ZCiH-d68Fyuqjh8xeseDT1tF`。运行清单在启动前展示固定提交、读写范围、模型、镜像、无网络、预算与验证命令。一次真实 Agent 运行进入 CodeAgent 阶段，并提出 `find . -type f -name "*.py" | head -30`；审批记录为 approved，唯一容器执行回执为退出码 0、耗时 5124 ms、未截断，任务容器在结束后无残留。随后任务以 **failed / task_tool_failed** 结束：补丁为 0 个文件、+0/-0，固定验证为 `not_run`，限制为 `verification_not_run`。公开投影没有保存下一次失败工具调用的名称或参数，因此不能断言具体根因，也不能把本次算作三个缺陷已修复。此前通过服务直接准备的 `wGBM_c1SZUp4rAW2IyHb9DC7` 仍为未运行的 prepared 副本，未计作第二次真实运行。
+
+无 provider 的后续定位复现了一个独立接口问题：任务版 `GrepTool` 的默认 `path="."` 被 `TaskFilesystem` 拒绝，返回 `task_file_access_denied`；显式给出范围内文件路径则可成功。任务工作流把工具返回的 `ok=false` 归为终止性 `task_tool_failed`。公开投影无法证明本次 Agent 正是省略了这个参数，因此该复现只列为后续调查线索，不作为本次失败的确证原因，也未据此改写安全策略或发起第二次真实运行。
+
+结束后只读核对来源 `HEAD` 仍为 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`，与本地 `origin/master` 左右计数均为 0；`git status --short` 仍只显示原有的一个未跟踪文档，没有已跟踪文件改动。真实任务 work 中不存在 `.env`。本次有真实 provider／Agent 试运行，实际 provider 请求数未由公开结果给出，不能推定精确数量；没有重跑正式槽位、回写来源、提交、push 或修改远端。已确认的一次运行额度用尽，后续真实重试须重新授权。
+
+---
+
+## 42. 2026-09-29 Task 10 后续工具接口修复（无 provider）
+
+经用户确认，仅修正任务版 `GrepTool` 的参数契约：`path` 现在是 Agent 可见工具 schema 中的必填项，调用者须给出单个范围内文件路径。省略参数会在工具入参校验处拒绝；显式路径搜索可用，目录、越界路径和链接替换仍按原有文件边界拒绝。没有加入递归搜索，也没有改变工具失败即终止的策略。
+
+先增加 schema 回归断言，确认旧实现只要求 `pattern` 时测试失败；再去掉 `TaskFileTools.grep()` 的 `path="."` 默认值。指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 的任务文件边界测试为 **15 passed**，全项目非 Docker 回归为 **704 passed、3 skipped、35 deselected、0 failed**（162.20 秒）。3 项 skip 是既有 Windows 符号链接能力限制，1 条 Starlette TestClient 弃用警告仍在；Ruff `--no-cache src tests` 与 `git diff --check` 通过。
+
+本轮没有调用 provider、启动真实 Agent、运行 Docker 或补跑正式槽位，也没有提交、push 或写远端。公开投影仍不足以确认第 41 节真实试点的失败工具调用，故本修复不能被视为该试点根因已证实或三个目标已完成；第二次真实运行仍须另行授权。
+
+---
+
+## 43. 2026-09-29 Task 10 后续两次受控真实运行
+
+用户另行授权最多两次独立真实运行。沿用第 41 节固定来源提交 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`、五项读写范围、三个修复目标、`qwen3.5-flash`、镜像 digest 和每次 1 attempt／1200 秒／16 次 provider 请求／30000 总 token／单次输出 3072 token；验证命令仍是排除两个既有 Linux 容器基线失败后的 `tests/test_tools.py` 子集。启动服务的页面资源与阶段 B 工作树一致，`run_available=true`；来源开始时仅有原有未跟踪文档，HEAD 与 `origin/master` 相同。
+
+第 1 次使用此前未运行的 prepared 任务 `wGBM_c1SZUp4rAW2IyHb9DC7`。Agent 请求在隔离副本内列文件；审批请求在固定的 120 秒等待期内没有收到决定，随后过期，任务终态为 `failed / task_tool_failed`。事件没有审批决定，私有记录的执行回执为 0，未执行容器命令；补丁为 0 个文件，固定验证 `not_run`。用户后来对该旧摘要作出的批准已失效，没有用于任何后续请求。此失败由审批期限解释，不证明第 42 节接口修复有效或无效。
+
+第 2 次重新预览同一提交，清单 digest 与原规格相同：27 个普通文件、179494 字节、0 个阻断路径。因工作台重启后本次登记的 `repo_id` 与旧任务记录不同，准备新任务时使用当前仓库登记 ID；新任务为 `w88SYgGwfgm9KeJkgTQIaTv-`。用户分别明确批准其三个请求：列出最多 50 个源码文件、`ls -la`、再次 `ls -la`。三份父进程执行回执分别为退出码 0、4880／516／432 ms，均未截断；重复命令使用不同请求 ID 和摘要，未复用批准。随后任务终态为 `failed / provider_failed`，补丁仍为 0 个文件，固定验证 `not_run`。公开投影和私有回执不包含可确定 provider 原始异常或精确请求数的材料，因此不推断失败的具体原因，也不把三个目标记为已修复。
+
+本轮两次真实运行由助手调用工作台本机 API 启动，逐条取得用户在对话中的明确批准后，再提交绑定请求 ID 与摘要的审批；**运行时没有在 Codex 内置浏览器中操作工作台页面**。用户指出此执行方式与期望的浏览器流程不一致后，助手才在内置浏览器打开当前地址并核对页面。新开的页面显示真实 Agent 可用，但任务区只提示先选择仓库和提交，没有恢复上述已有任务的选中状态；本轮不把 API 审批冒称为页面审批。后续应先在无 provider 条件下处理任务恢复与页面审批可见性，再考虑新的真实试点。
+
+两次任务的 `cleanup_confirmed=true`，只读 Docker 列表对两个 task ID 均为 0 个残留容器。来源结束时 HEAD、全部 refs、index SHA-256 和原有未跟踪状态与开始时一致；没有读取 `.env` 秘密值或触碰冻结 Rich／Click 分析与 ignored 实验证据。没有提交、push、远端写入或正式槽位补跑。本轮获准的两次运行额度已经用尽；进一步 provider 诊断或真实运行须另行授权。重启后旧任务的页面选中状态与单次审批期限对人工操作形成限制，后续应先用无 provider 测试改善任务恢复与审批可见性。
+
+---
+
+## 44. 2026-09-29 内置浏览器任务恢复与新试点第 1 次结果
+
+用户另行批准最多两次真实运行，并确认先修复页面任务恢复。页面现在在创建任务后将不透明任务 ID 加入本机地址；刷新时按 ID 读取记录，仅在仓库 ID、固定提交和历史锚均匹配时恢复状态、审批和结果，切换选择会清除旧 ID。先写 Node 驱动的真实页面脚本测试，旧代码因刷新后 `taskId=null` 失败，修改后通过；浏览器里打开并刷新旧任务 `w88SYgGwfgm9KeJkgTQIaTv-` 后，任务失败类别、结果和事件仍可见。定向测试 **7 passed**；指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 的全项目非 Docker 回归 **705 passed、3 skipped、35 deselected**，1 条既有 TestClient 弃用警告。Ruff、JavaScript 语法和 `git diff --check` 均通过。验证不调用 provider。
+
+随后首次通过 Codex 内置浏览器填写和预览同一固定提交、五项范围与三个目标，预览仍为 27 文件、179494 字节、0 阻断，并准备任务 `cJ7RHyPrvHSsVSKMr2olRr41`。页面清单显示 `qwen3.5-flash`、原镜像 digest、`network=none`、1200 秒／1 attempt／16 次请求／30000 总 token／单次输出 3072 token 和原固定验证命令。页面创建新任务后曾短暂保留旧任务结果面板；刷新到新任务链接后只显示新任务清单，该展示问题待独立处理。
+
+用户本轮额度中的第 1 次从浏览器页面启动，任务在公开 `entry` 事件后以 **failed / task_tool_failed** 结束，没有待审批命令或执行回执，补丁为 0 个文件，固定验证 `not_run`。公开事件无法定位具体工具及参数，不能断言根因。只读代码核对发现一个可复现的独立缺口：任务已固定验证命令，但 `TodoWriteTool` 仍要求模型另给非空验证命令，否则规划工具返回失败；此缺口可能解释早期终止，尚无事件证据证明本次恰好触发它。该修复须按用户对简短设计的回复再实施，剩余 1 次额度未用。
+
+来源 HEAD 仍为 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`，已跟踪文件无改动，原有未跟踪文档仍在。任务记录 `cleanup_confirmed=true`，只读 Docker 列表无 MokioClaw 任务容器。未读取 `.env` 秘密值、未修改冻结证据、未补跑正式槽位，也未提交、push 或写远端。
+
+---
+
+## 45. 2026-09-29 任务版固定验证清单修复与最后一次运行
+
+用户确认简短设计：任务版 `TodoWriteTool` 始终使用创建任务时已确认的固定验证清单，模型省略、传空列表或提出其它命令时都不能改变它；普通 CLI/TUI 的参数契约不变。先给省略、空列表、替换命令以及无固定命令四种情况增加实际 `StructuredTool.invoke` 路径的测试，旧实现分别因参数校验、`ok=false` 或接受模型命令而失败；修改后测试通过。任务图模块 **17 passed**，指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 的全项目非 Docker 回归 **710 passed、3 skipped、35 deselected**，1 条既有 TestClient 弃用警告；Ruff 与 `git diff --check` 通过。测试未调用真实 provider。
+
+随后在 Codex 内置浏览器用同一固定提交、五项范围、三个修复目标、预算、模型、镜像和验证命令重新预览，结果仍为 27 文件、179494 字节、0 阻断；准备任务 `P11KhyuUxz2ZytjnUKTtpRaN`。页面创建新任务后仍短暂显示前一任务的运行清单，刷新到新任务链接后，新任务清单和身份正确；这是独立的页面状态缺陷，不能把旧清单视为新任务的已确认策略。
+
+用户新增两次额度中的最后一次从该浏览器页面启动。浏览器控制在提交按键时超时，但后续页面与私有最小记录均确认本任务确实进入 `running`，公开事件只到 `entry`，随后终态为 **failed / task_tool_failed**。没有待审批命令、执行回执或修改文件；补丁 0 个文件，固定验证 `not_run`。这表明第 44 节规划清单缺口的修复不足以让该任务通过；公开事件不包含失败工具身份或参数，不能断言两次入口失败有相同根因，也不能宣称三个原始目标完成。
+
+结束后只读核对来源 HEAD 为 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`，已跟踪文件无改动，原有未跟踪文档仍在；任务记录 `cleanup_confirmed=true`，Docker 列表无 MokioClaw 任务容器。两次新增真实运行额度现已用尽。没有读取 `.env` 秘密值、补跑正式槽位、改写冻结证据、提交、push 或修改远端。继续真实试点需新授权；宜先设计仅暴露固定工具名与失败类别的脱敏诊断，完成无 provider 验证后再申请真实额度。
+
+---
+
+## 46. 2026-09-29 Task 10 脱敏诊断与新任务页面隔离（无 provider）
+
+用户确认简短设计后，在阶段 B 工作树补充终止性任务工具失败摘要。规划、CodeAgent 与 verifier 的任务工具在返回拒绝或抛出非 provider 异常时，先发出仅含固定工具身份和受控失败类别的 `tool_failure`；未知名称与类别折叠为 `unknown`。类别仅为 `invalid_arguments`、`scope_denied`、`approval_denied_or_expired`、`tool_rejected`、`tool_exception`、`unknown`。内层已发诊断时外层委派不重复报错；内层未报告而外层工具终止时，外层给出固定身份。worker 继续只投影白名单字段，参数、路径、异常原文、prompt、源码、工具输出和 provider 信息不进入公开事件。
+
+页面开始创建新任务即清除旧任务 ID、运行清单、结果、事件与审批，作废旧轮询并从 URL 移除旧 ID；新记录的仓库、固定提交及历史锚均匹配后才绑定。创建响应不确定时保留同一幂等键供核对后的同请求重试。Node 驱动的实际页面脚本覆盖等待新建响应时旧面板消失、新任务返回后加载自己的清单与 URL 身份，以及固定工具失败标签。假模型完整图分别覆盖规划参数校验失败、CodeAgent 文件范围拒绝和外层独立失败；内层失败只产生一条公开摘要，私有输入未出现。先红后绿的定向测试均按预期失败和通过。
+
+最终全项目**非 Docker**回归用指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 与关闭 pytest 缓存运行，结果为 **717 passed、3 skipped、35 deselected、0 failed**，耗时 166.58 秒。3 项 skip 均为既有 Windows symlink 能力限制；1 条既有 Starlette TestClient 弃用警告。Ruff `--no-cache src tests`、JavaScript 语法和 `git diff --check` 通过；本次改动文件的常见密钥格式扫描无命中。Rich 三份冻结分析及最终比较四份文件的只读 SHA-256 均与第 36 节记录一致。未运行 Docker 实测、真实 Agent、provider 或正式 Rich/Click 槽位。
+
+这些新诊断只能用于以后运行，不能倒推出第 44–45 节已结束任务的失败工具或根因。本轮没有新真实任务、补丁或固定验证结果；三个原始修复目标仍未完成，B5 仍未通过，真实运行次数额度仍为零。未改动来源仓库、冻结分析或 ignored 证据，也未提交、push 或修改远端。
+
+---
+
+## 47. 2026-09-29 Task 10 入口失败的无 provider 定位探针
+
+用户确认先调查阶段 B Task 10 未成功完成的 Agent 维护试点。沿 `stream_agent_events`、`planner_node`、`_execute_planner_tool` 和 `run_code_agent` 的事件顺序核对：`entry` 表示路由节点已完成，规划节点完成后才会有 `planner`；`CallCodeAgentTool` 在进入内层执行前先发 `handoff`，公开为 `code_agent`。因此第 44–45 节两次旧任务的“只到 `entry`”现象可将调查范围收窄至规划阶段，但不证明具体工具调用或根因。旧运行没有新增的 `tool_failure` 摘要，无法补取固定工具名和类别。
+
+无 provider 验证使用指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 与 `-p no:cacheprovider`：任务图和文件边界模块 **37 passed**。相关假模型测试分别证明规划入参失败可在终止前公开固定的 `TodoWriteTool / invalid_arguments`，以及临时工作区的完整流程可修改已有文件并进入固定验证；没有调用 provider 或真实 Agent。先前一次定向命令误写不存在的 pytest 节点，0 项收集并退出 1；改正节点名后的三项测试 **3 passed**。这不是代码回归。
+
+另有独立接口限制：CodeAgent 提示说 `FileWriteTool` 可新建文件，任务工具却明确只改写已有文件；Windows 的 `TaskFilesystem.create_bytes` 故意 fail closed，现有测试验证新建会拒绝。此点不能解释两次尚未进入 `code_agent` 的旧失败，也不阻止在已有 `tests/test_tools.py` 增加 Task 10 回归用例。本轮只更新交接与调查记录，没有修改行为；此前五次仍无补丁、固定验证仍均为 `not_run`，三个 Grep/Bash 修复目标未完成，真实运行额度为零。未读取 `.env` 值、改写冻结或 ignored 证据、触碰来源仓库，也未提交、push 或写远端。
+
+---
+
+## 48. 2026-09-29 Task 10 新额度前两轮与 provider 失败分类
+
+用户另行批准最多三次真实试点，并明确同意固定选中 27 个文件范围发送到 `tokendance.space` 配置的 `qwen3.5-flash` provider。沿用第 41 节同一来源 SHA、任务范围、镜像、预算和固定验证命令；没有扩大读取范围。用户在原有任务专用环境的终端将工作台重启至本机端口 51461；健康与运行能力检查通过。开始前的指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 全项目非 Docker 回归为 **717 passed、3 skipped、35 deselected**；Ruff、JavaScript 语法及 `git diff --check` 通过。
+
+第 1 次新试点 `A44GAezHveH-qFcUWns_Rypq` 由内置浏览器创建并启动。预览仍为 27 文件、179494 字节、0 阻断。一条列文件命令经单次审批后退出 0、耗时 4810 ms、未截断。此后有若干内层 `tool_result` 失败项，但公开记录无工具身份和参数；终态 **failed / provider_failed**，补丁 0 文件、+0/-0，固定验证 `not_run`。不能从工具状态推断 provider 的原始异常。启动确认的自动审批审查曾拒绝，随后实际核对发现任务已运行；因此计为已用一次，并保留此异常观察，不在页面控制中断后盲目重试。
+
+第 2 次 `RrziZ1uM7UqvIy3gQN4SDyW7` 从内置浏览器再次预览、核对清单、创建和启动。待批列文件命令在 120 秒内没有收到批准，私有执行回执为 0；公开 `tool_failure` 为 `BashTool / approval_denied_or_expired`。终态 **failed / task_tool_failed**，补丁 0，固定验证 `not_run`。用户事后表示错过了审批；过期请求未复用。两次任务均 `cleanup_confirmed=true`，Docker 列表无残留任务容器。来源 HEAD、refs、index 哈希及原有未跟踪状态保持不变。三次新增额度已使用两次，剩余一次。
+
+用户确认先补限定诊断后，在阶段 B 工作树按 OpenAI SDK 异常类型映射固定 provider 终态类别：认证／权限、限流、格式错误、连接／超时、服务端错误、未知；本地预算耗尽单独记录。异常消息、响应体、URL、凭据不进入 worker／父进程消息，未知异常仍折叠为 `provider_failed`。假模型及本机 worker socket 测试先红后绿，定向 **48 passed**。指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 的全项目非 Docker 回归 **736 passed、3 skipped、35 deselected**，1 条既有 Starlette 弃用警告；Ruff `--no-cache src tests` 与 `git diff --check` 通过。该改动不调整预算、重试、源码范围或审批边界，不能回溯第 1 次的 provider 根因。三个原始 Grep/Bash 修复目标未完成，没有生成补丁、没有执行固定验证；没有补跑正式槽位、改写冻结或 ignored 证据、应用补丁到来源、提交、push 或修改远端。
+
+---
+
+## 49. 2026-09-29 五次新额度中的前三轮
+
+用户再授权从现在起最多五次真实运行，并允许助手在审查具体命令后自行逐条审批；先前未用的一次不叠加到五次。仍沿用固定来源提交、27 文件选中范围、已明确的 provider 目的地、`qwen3.5-flash`、镜像、每轮 16 请求／30000 token／1200 秒和固定验证。用户从保有任务 provider 设置的终端重启本机工作台；新服务启动时间晚于 provider 类别代码修改，健康、任务及运行能力门均可用。
+
+首轮 `s9y_GZNQ6tK9sWFXa91MEs49` 从内置浏览器预览、准备，清单显示固定 SHA、读写范围、模型、镜像、`network=none`、预算与验证命令一致。启动按键遇到 JavaScript 确认中断，先核对页面确认任务已运行，未重复提交。待批 `find . -type f -name "*.py" | head -50` 在隔离工作目录且命令网络关闭，助手按新授权逐条批准；公开事件记录 approved。审批后 8 条工具结果均为 `passed`，最终 **failed / provider_budget_exhausted**；补丁 0 文件、固定验证 `not_run`，任务清理确认。公开结果不区分触发的是请求次数还是已报告 token 上限，也不给出精确 provider 请求数；不能将其推断为原始 Grep/Bash 缺陷的根因或修复结果。五次额度已使用一次，剩余四次。
+
+用户同意保持预算及范围不变、将三个修复目标拆成聚焦试点。第 2 轮 `O6GyUZBfLvmtwsGrOVY5ZYgU` 聚焦 Grep 符号链接边界，浏览器预览与准备后，JavaScript 运行确认控制连续超时；先只读核对任务仍为 `prepared`，后用同一本机工作台 API 核对清单并启动。只读列文件命令由助手按新授权逐项核对并批准，执行回执 1 条。终态 **failed / task_tool_failed**，新增脱敏摘要为 `FileReadTool / scope_denied`，补丁 0，固定验证 `not_run`；被拒绝路径没有公开，不能判定具体入参或根因。
+
+第 3 轮 `S4oVjjNUxJahxiqZgeY8Sa5U` 聚焦 Grep 非法正则与读取上限；浏览器确认标签仍无响应，改用本机 API 预览、准备、核对固定清单并启动。没有命令待批；公开 CodeAgent 后续 11 条工具结果均为 `passed`，终态 **failed / provider_budget_exhausted**，补丁 0，固定验证 `not_run`。不能由工具事件数推断精确 provider 调用量或 token 数，也不能据此确证通用提示为根因。三轮任务均清理确认，Docker 列表无任务容器残留；来源 HEAD、refs 关系、index 哈希及原有未跟踪状态保持原状。五次额度已用三次，剩余两次。
+
+代码检查显示任务版 CodeAgent 仍使用通用提示，其中要求每项待办开始、完成时更新进度；已向用户提出仅对隔离任务精简提示并以假模型先行验证的具体设计，待回复前不修改行为。没有应用补丁到来源、提交、push、改动远端、读取 `.env` 值、修改冻结分析或 ignored 证据，也没有补跑正式 Rich/Click 槽位。第 2、3 轮实际启动／审批走本机 API，不能记为完整浏览器操作。
+
+---
+
+## 50. 2026-09-30 Task 10 隔离任务提示与第 4 次试点
+
+用户批准任务版 CodeAgent 使用简短系统提示，优先按准确路径读取并尽早编辑、验证已有文件，待办状态按实际变化更新；普通 CLI/TUI 保持原提示。无 provider 假模型测试先红后绿，**2 passed**。首次把提示放入 `src/mokioclaw/prompts/stage3.py` 后，完整测试暴露 Click 冻结身份哈希不匹配；将新提示移到 `src/mokioclaw/agents/code_agent.py`，提示文件恢复 Git 原字节，定向提示及 Click 身份测试 **3 passed**。首次全量命令误纳入 Docker 标记测试，得 **30 failed、739 passed、3 skipped、4 deselected**；除 Click 身份项外，其余失败属于本轮 Docker 测试环境。改用 `-m 'not docker'`，指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 的完整非 Docker 回归 **738 passed、3 skipped、35 deselected、0 failed**，1 条既有 Starlette 弃用警告。Ruff `--no-cache` 和 `git diff --check` 通过。没有把失败的首次运行或未重跑的 Docker 测试记作通过。
+
+新 worker 由独立 Python 进程从阶段 B 工作树 `src` 导入代码，本机运行能力门仍开放。第 4 次新额度通过本机 API 在固定来源 SHA、27 文件范围、镜像、模型、provider 目的地、预算与验证命令下创建并运行 Bash 输出上限聚焦任务 `OuufbzR3ud-AQ-rKZLGjJUt0`。预览 179494 字节、0 阻断；没有待批命令。公开事件在 `entry` 后到 `code_agent`，其后五条工具结果均为通过，最终 **failed / provider_budget_exhausted**，补丁 0，固定验证 `not_run`，清理确认。公开事件不给出精确 provider 请求或 token 用量，不能确认是哪个上限触发，也不能把提示与失败作因果断言。来源 HEAD、与本地 `origin/master` 的 0/0 关系及原有未跟踪状态不变。五次额度已用四次，剩余一次，暂留待无 provider 的阶段预算调查后再判断。未应用补丁到来源、提交、push、改远端、读取 `.env` 值、补跑正式 Rich/Click 槽位或改写冻结／ignored 证据。
+
+---
+
+## 51. 2026-09-30 Task 10 无 provider 阶段预算调查
+
+用一次性假模型和临时工作区实际穿过任务图，复核共享预算在入口、规划、CodeAgent、verifier 之间的计数。完整假流程各阶段模型调用为 **1／3／3／1**，共 8 次，固定验证由无 Docker 的假网关返回。模拟 30000 token 累计上限时，入口 1 次、规划 2 次、CodeAgent 5 次后即报 `provider_budget_exhausted`，公开形态为规划工具结果 1 条与 CodeAgent 后结果 5 条；模拟 16 次请求上限时，入口 1 次、规划 2 次、CodeAgent 13 次后才报同一类别。三个探针均由断言核对通过，未调用 provider。现有任务 provider 与图注入测试使用指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp` 得 **40 passed**。
+
+重查三项真实预算终态的公开事件，规划交接前各 1 条工具结果，CodeAgent 交接后分别 8、10、5 条；第 3 轮此前所写 11 条是两阶段总和。由当前调用与事件投影路径，入口固定 1 次、交接前规划至多 2 次、CodeAgent 每条已公开工具结果至多对应 1 次模型调用，因此失败前启动调用数上界分别为 **11、13、8**，均小于固定 16 次。结合 `_TaskModel.invoke` 的两种预算检查，三轮可以归于**已报告累计 token 达到或超过 30000**，而非请求次数上限。假模型中的分阶段 token 值只是机制测试；历史真实任务的精确请求数、逐阶段 token 分摊及最后一次响应可能超出阈值多少，因未保存该计数，仍不可恢复。没有证据证明提示修改或任一原始 Grep/Bash 缺陷造成高 token 消耗。最后一次额度继续保留；若需精确阶段数据，先审阅仅输出固定阶段名和数值计数的脱敏诊断，再做假模型验证。本轮未修改产品行为、调用真实 provider、运行任务或 Docker，也未触碰来源、冻结／ignored 证据、提交、push 或远端。
+
+---
+
+## 52. 2026-09-30 Task 10 固定阶段用量诊断（无 provider）
+
+用户审阅并认可只公开固定阶段、已启动模型调用数和已报告 token 数的设计后，在阶段 B 工作树给任务模型包装器增加六个显式阶段的独立计数。`bind_tools` 保留阶段，规划中嵌套的 CodeAgent 调用不再混入规划计数。worker 在正常结束或异常退出工作流时发布一条跨 attempts 累计的 `budget_usage` 快照，当前 attempt 仅用于事件身份；父进程只接受完整固定字段和有界非负整数，不传播额外原始数据。页面显示各阶段数值，缺少快照时说明用量未知。失败调用计入已启动调用，但不等于 provider 已接收或计费；缺失 usage 时显示已知部分并保持 `usage_unavailable` 终态。历史任务不可回填。
+
+无 provider 假模型与任务图、worker 通道及页面脚本测试先红后绿，覆盖正常完成、跨两次尝试、token 和请求上限、provider 异常、缺失用量、字段拒绝及私有内容丢弃。最终指定 Windows Python、显式 `PYTHONPATH=src`、独立 `--basetemp`、禁用 pytest 缓存的全项目非 Docker 回归为 **754 passed、3 skipped、35 deselected、0 failed**；3 项 skip 为既有 Windows 符号链接能力限制，1 条既有 Starlette 弃用警告。Ruff、JavaScript 语法、`git diff --check`、目标文件常见密钥格式扫描通过；主项目 Rich 三份与 Rich–Click 四份冻结文件的只读哈希与第 36 节一致。本轮未重启旧工作台父进程；新事件投影在后续真实任务前需要由重启后的父进程加载。最后一次真实运行额度未使用，实际阶段用量、零补丁和固定验证未运行仍未解决；未调用 provider、启动 Agent 或 Docker、补跑正式槽位、改写来源／冻结／ignored 证据、提交、push 或修改远端。
+
+---
+
+## 53. 2026-09-30 Task 10 重启后 Grep 聚焦试点
+
+用户重启本机工作台并另给最多三次真实运行额度。本轮只使用一次：固定提交 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`，27 文件／179494 字节／0 阻断，固定五项范围和原模型、镜像、无网络、预算及验证命令。页面预览按钮未显示结果，故本次预览、创建、运行经同一工作台本机 API；任务 `Bj4zjkW1CWSkib4QoDD2ZahW` 在核对 `prepared` 和完整运行门后单次启动，没有待批命令。公开终态 **failed / task_tool_failed**，`FileEditTool / scope_denied`，补丁 0，固定验证 `not_run`。
+
+新增阶段快照首次给出真实已报告用量：入口 **1／1086**、规划 **2／3815**、CodeAgent **4／36527**（调用／token），其它固定阶段 0，合计 **7／41428**。这是 worker 的已启动调用与 provider 返回的有效 usage 累加，不等于 provider 已接收或计费请求数；单次响应可越过任务的 30000 token 门，本次实际先因工具失败结束。无 provider 复现表明 `FileEditTool` 的旧文本缺失／不唯一也返回 `task_file_access_denied`，投影后与真实范围拒绝同为 `scope_denied`；本次事件不能确定实际失败路径或内容，更不能确认 Grep 原始缺陷根因。先改进此受控类别区分并假模型验证，再决定是否动用剩余两次；未做同配置重跑。来源 HEAD、与本地 `origin/master` 的 0/0、index SHA-256 `80809046112C918D18367AEFEB36A318A39BD5E8EC764D00178B539E1ADA1BF4` 及原有未跟踪状态均不变。只读 Docker 列表遇权限拒绝，未声称容器列表已检查。未应用补丁到来源、提交、push、改远端、读取 `.env` 值或触碰冻结／ignored 证据。
+
+---
+
+## 54. 2026-09-30 Task 10 编辑误分类与第二次聚焦试点
+
+阶段 B 任务版 `FileEditTool` 对文本未命中／非唯一改用内部 `task_edit_match_failed`，公开归为现有 `tool_rejected`；路径／文件拒绝仍为 `scope_denied`。新增真实文件工具测试先 **2 failed、5 passed**，最小修正后 **7 passed**；全项目非 Docker 回归 **756 passed、3 skipped、35 deselected、0 failed**，1 条既有弃用警告，Ruff 与 `git diff --check` 通过。均使用指定 Windows Python、显式 `PYTHONPATH=src`、各次独立 `--basetemp`，无 provider。工作台父服务无须加载新公开枚举，新 worker 按现有启动路径从阶段 B 工作树导入修正。
+
+第二轮新授权任务 `B2MdMCP7IObV4BCeA_gPdgRK` 在固定来源、27 文件范围、原预算和验证清单下经本机 API 创建、核对并启动；终态 **failed / provider_budget_exhausted**，没有待批命令或工具失败。阶段累计入口 **1／586**、规划 **2／4021**、CodeAgent **4／37227**，总 **7 次已启动调用／41834 已报告 token**，其它阶段 0。隔离副本仅新增 `tests/test_tools.py` 25 行，Grep 实现无修改，固定验证 `not_run`。新增测试的搜索模式 `should be found` 不匹配越界目标 `This should not be found`，即使链接被读取也可能通过，故不构成有效安全回归。未应用部分补丁到来源。新给三次额度已用两次、剩余一次；当前固定预算下尚无完成的修复，暂不盲目重试。未提交、push、改远端或冻结证据。
+
+---
+
+## 55. 2026-09-30 Task 10 无 provider 手工候选验证
+
+固定镜像中显式覆盖原 `/bin/sh -lc` entrypoint 后，以无网络、非特权、只读源码挂载运行第二轮原始部分测试得 **1 passed、43 deselected**，确认它在未修实现上不报警。Windows 本机没有符号链接创建权限，故另复制固定任务 baseline 到临时目录，在该副本中增加越界文件和普通文件使用同一搜索词的测试。容器中该测试先 **1 failed、43 deselected**，结果确实包含越界链接；仅在临时副本的 Grep 遍历中跳过符号链接候选后 **1 passed、43 deselected**。原定验证命令在手工候选上 **42 passed、2 deselected**，另有只读挂载的 pytest 缓存警告。Agent 第二轮的固定验证状态仍为 `not_run`，两者不能混记。手工候选补丁保存为 `docs/task10_grep_symlink_candidate.patch`，对干净 baseline 的 `git apply --check --whitespace=error-all` 通过；未应用到来源、任务产物或阶段 B 冻结源码。候选尚未证明目录链接或并发替换竞态的安全性，不能称为最终 Grep 修复。剩余一次真实运行额度继续保留。
+
+---
+
+## 56. 2026-09-30 最后一次授权试点：80000 token 上限
+
+按用户明确要求，保留固定来源 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`、27 文件／179494 字节、五项读写范围、清单摘要、模型、镜像、无网络、任务说明、16 次调用、1 attempt／1200 秒／3072 输出 token 和原验证命令，仅把任务已报告 token 上限由 30000 改为 **80000**。任务 `6QKRh-o6P2mrL8yQBLNSIW7B` 在本机工作台经 API 预览、准备、核对清单后单次启动，没有命令待批；本次三次额度已全部使用。
+
+终态 **failed / task_tool_failed**，固定摘要 **FileEditTool / tool_rejected**；公开信息不足以确定具体编辑内容或失败路径。预算快照：入口 **1／577**、规划 **2／3941**、CodeAgent **6／63752**，合计 **9 次已启动调用／68270 已报告 token**，其它阶段 0；不是 token 或调用次数耗尽。补丁仅在隔离任务副本，可用摘要为 **2 文件、+32/-0**，Agent 固定验证 **not_run**，清理确认且无 MokioClaw 容器残留。
+
+独立只读审查发现补丁用路径字符串前缀判断越界，固定镜像的无 provider 临时夹具证明兄弟目录 `work-extra` 可经 `work` 内链接被读到；检查至打开的替换竞态仍未处理。隔离 work 上独立执行同一固定 pytest 命令得 **42 passed、2 deselected**，另有只读挂载缓存警告，但不能记为 Agent 验证通过；`git apply --check --whitespace=error-all` 发现两处新增尾随空格。来源 HEAD、相对本地 `origin/master` 的 0/0、index SHA-256 `80809046112C918D18367AEFEB36A318A39BD5E8EC764D00178B539E1ADA1BF4` 及原有未跟踪状态保持不变。未应用补丁到来源、提交、push、改远端、读 `.env` 值或动冻结／ignored 证据。此补丁不能称为完整链接修复；后续真实试点须重新授权次数。

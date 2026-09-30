@@ -3,20 +3,34 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import time
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from threading import RLock
+from threading import RLock, Timer
+from types import SimpleNamespace
+from typing import Callable
 
 from mokioclaw.dashboard.catalog import RepositoryCatalog
+from mokioclaw.dashboard.task_approval import ApprovalBroker, ExecutionRequest
 from mokioclaw.dashboard.git_reader import LocalGitReader
 from mokioclaw.dashboard.task_copy import PreparedTask, _validate_task_root, prepare_task
 from mokioclaw.dashboard.task_events import project_task_event
-from mokioclaw.dashboard.task_models import TaskRecord, TaskSpec
+from mokioclaw.dashboard.task_executor import DockerCLI, IsolatedCommandExecutor, TaskCommandGateway, TaskExecutionError
+from mokioclaw.dashboard.task_models import ExecutionReceipt, PublicTaskEvent, TaskRecord, TaskResult, TaskSpec
+from mokioclaw.dashboard.task_result import (
+    ResultSnapshotError, build_task_result, load_result_snapshot, save_result_snapshot,
+)
 from mokioclaw.dashboard.task_source import TaskSource
 from mokioclaw.dashboard.task_store import TaskConflict, TaskStore
+from mokioclaw.dashboard.task_worker import TaskWorkerLauncher
+from mokioclaw.dashboard.task_worker_control import (
+    DockerOwnershipCleanup, ProcessIdentity, TaskWorkerController,
+)
+from mokioclaw.providers.openai_provider import ProviderSettings
 
 
 class InvalidTaskRequest(ValueError):
@@ -140,6 +154,7 @@ class TaskService:
     def __init__(
         self, catalog: RepositoryCatalog, reader: LocalGitReader, task_root: Path,
         *, fake_runner: FakeTaskRunner | None = None,
+        worker_controller_factory: Callable[[TaskStore], TaskWorkerController] | None = None,
     ) -> None:
         self.catalog = catalog
         self.reader = reader
@@ -148,6 +163,9 @@ class TaskService:
         self.lease = _TaskRootLease(self.task_root)
         try:
             self.store = TaskStore(self.task_root)
+            self.worker_controller = worker_controller_factory(self.store) if worker_controller_factory else None
+            if self.worker_controller is not None:
+                self.worker_controller.reconcile()
         except Exception:
             self.lease.close()
             raise
@@ -157,11 +175,156 @@ class TaskService:
         self._lock = RLock()
         self._prepared: dict[str, PreparedTask] = {}
         self._specs: dict[str, TaskSpec] = {}
+        self._approval_return_states: dict[tuple[str, str], str] = {}
         self.fake_runner = fake_runner
+        self.task_image_digest: str | None = None
+        self.task_model_name: str | None = None
+
+    def configure_agent(self, provider_settings: ProviderSettings, image_digest: str) -> None:
+        """Install the task capability without starting a worker, container, or model."""
+        if not isinstance(provider_settings, ProviderSettings) or not isinstance(image_digest, str):
+            raise ValueError("Invalid task capability")
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is None:
+            raise ValueError("Invalid task image digest")
+        with self._lock:
+            if self.worker_controller is not None:
+                raise TaskConflict("Task worker is already configured")
+            controller = TaskWorkerController(
+                store=self.store,
+                launcher=TaskWorkerLauncher(provider_settings, start_payload=self.worker_start_payload),
+                containers=DockerOwnershipCleanup(),
+                broker=ApprovalBroker(on_request=self._on_approval_request),
+            )
+            controller.reconcile()
+            self.worker_controller = controller
+            self.task_image_digest = image_digest
+            self.task_model_name = provider_settings.model
+
+    def run_available(self) -> bool:
+        """Require the explicitly configured image to exist locally before a run."""
+        with self._lock:
+            image = self.task_image_digest
+            if self.worker_controller is None or image is None or self.task_model_name is None:
+                return False
+        try:
+            found = DockerCLI().run(
+                ["docker", "image", "inspect", image, "--format", "{{.Id}}"],
+                timeout_seconds=5, max_output_chars=100,
+            )
+        except (TaskExecutionError, OSError):
+            return False
+        return found.returncode == 0 and found.stdout.strip() == image
+
+    def run_policy(self, task_id: str) -> dict:
+        """Publish only the immutable task and execution limits for final review."""
+        with self._lock:
+            record = self.store.get(task_id)
+            if record.state != "prepared" or self.worker_controller is None or self.task_image_digest is None:
+                raise TaskConflict("Task is not ready for run review")
+            spec = self._fixed_spec(task_id)
+            return {
+                "task_id": task_id, "repo_id": spec.repo_id, "base_sha": spec.base_sha,
+                "anchor_sha": spec.anchor_sha, "description": spec.description,
+                "source_read_scope": list(spec.source_read_scope),
+                "source_write_scope": list(spec.source_write_scope),
+                "task_scratch_scope": spec.task_scratch_scope,
+                "verification_commands": list(spec.verification_commands),
+                "max_seconds": spec.max_seconds, "max_attempts": spec.max_attempts,
+                "max_provider_calls": spec.max_provider_calls,
+                "max_total_tokens": spec.max_total_tokens,
+                "max_output_tokens_per_call": spec.max_output_tokens_per_call,
+                "model": self.task_model_name, "image_digest": self.task_image_digest,
+                "network": "none",
+            }
+
+    def _on_approval_request(self, request: ExecutionRequest) -> None:
+        with self._lock:
+            current = self.store.get(request.task_id)
+            controller = self.worker_controller
+            work = self.store.root / request.task_id / "workspace" / "work"
+            if (controller is None or current.instance_id != controller.instance_id
+                    or current.attempt_id != request.attempt_id
+                    or current.state not in {"running", "verifying"}
+                    or request.image_digest != self.task_image_digest
+                    or Path(request.mount_source).resolve(strict=False) != work.resolve(strict=False)):
+                raise TaskConflict("Stale task command request")
+            self._approval_return_states[(request.task_id, request.command_request_id)] = current.state
+            self.store.transition(request.task_id, current.state, "awaiting_approval", {})
+            current = self.store.get(request.task_id)
+            event = project_task_event({
+                "kind": "approval_request", "status": "waiting",
+                "request_id": request.command_request_id, "execution_digest": request.canonical_digest(),
+            }, request.task_id, request.attempt_id, current.sequence + 1)
+            self.store.record_event(request.task_id, request.attempt_id, event)
+
+    def pending_approvals(self, task_id: str) -> list[dict]:
+        with self._lock:
+            current = self.store.get(task_id)
+            controller = self.worker_controller
+            if (controller is None or current.instance_id != controller.instance_id
+                    or current.state != "awaiting_approval"):
+                return []
+            return [{
+                "attempt_id": item.attempt_id,
+                "command_request_id": item.command_request_id,
+                "execution_digest": item.canonical_digest(),
+                "command": item.command,
+                "cwd": item.cwd,
+                "timeout_seconds": item.timeout_seconds,
+                "image_digest": item.image_digest,
+                "mount_target": item.mount_target,
+                "network": item.network,
+                "cpu_limit": item.cpu_limit,
+                "memory_bytes": item.memory_bytes,
+                "pids_limit": item.pids_limit,
+                "max_output_chars": item.max_output_chars,
+                "policy_version": item.policy_version,
+            } for item in controller.broker.pending(task_id)
+                if item.attempt_id == current.attempt_id]
+
+    def decide_approval(
+        self, task_id: str, attempt_id: int, request_id: str, digest: str, approved: bool,
+    ) -> bool:
+        with self._lock:
+            current = self.store.get(task_id)
+            controller = self.worker_controller
+            previous = self._approval_return_states.get((task_id, request_id))
+            if (controller is None or current.instance_id != controller.instance_id
+                    or current.state != "awaiting_approval" or current.attempt_id != attempt_id
+                    or previous not in {"running", "verifying"}):
+                return False
+            if not controller.broker.decide(task_id, attempt_id, request_id, digest, approved):
+                return False
+            self._approval_return_states.pop((task_id, request_id), None)
+            self.store.transition(task_id, "awaiting_approval", previous, {})
+            current = self.store.get(task_id)
+            event = project_task_event({
+                "kind": "approval_decision", "decision": "approved" if approved else "denied",
+                "request_id": request_id,
+            }, task_id, attempt_id, current.sequence + 1)
+            self.store.record_event(task_id, attempt_id, event)
+            return True
+
+    def cancel_agent(self, task_id: str) -> TaskRecord:
+        with self._lock:
+            controller = self.worker_controller
+            if controller is None:
+                raise TaskConflict("Task worker is unavailable")
+            result = controller.cancel(task_id)
+            for key in tuple(self._approval_return_states):
+                if key[0] == task_id:
+                    self._approval_return_states.pop(key, None)
+            return result
 
     def close(self) -> None:
-        self.pool.shutdown(wait=True, cancel_futures=False)
-        self.lease.close()
+        try:
+            if self.worker_controller is not None:
+                self.worker_controller.reconcile()
+        finally:
+            try:
+                self.pool.shutdown(wait=True, cancel_futures=False)
+            finally:
+                self.lease.close()
 
     def preview(self, payload: dict):
         return self.source.preview(
@@ -215,6 +378,26 @@ class TaskService:
     def get(self, task_id: str) -> TaskRecord:
         return self.store.get(task_id)
 
+    def result(self, task_id: str) -> TaskResult:
+        with self._lock:
+            record = self.store.get(task_id)
+            if record.state not in {"completed", "failed", "cancelled", "timed_out", "interrupted"}:
+                raise TaskConflict("Task result is not ready")
+            spec = self._fixed_spec(task_id)
+            root = self.store.root / task_id
+            try:
+                cached = load_result_snapshot(root, record, spec)
+                if cached is not None:
+                    return cached
+                prepared = SimpleNamespace(
+                    root=root, baseline=root / "workspace" / "baseline", work=root / "workspace" / "work",
+                )
+                result = build_task_result(record, spec, prepared)
+                save_result_snapshot(root, record, result)
+                return result
+            except (OSError, ResultSnapshotError) as exc:
+                raise TaskConflict("Task result is unavailable") from exc
+
     def prepared(self, task_id: str) -> PreparedTask:
         try:
             return self._prepared[task_id]
@@ -229,6 +412,156 @@ class TaskService:
                 raise TaskConflict("Demo was cancelled")
             event = project_task_event(raw, task_id, current.attempt_id, current.sequence + 1)
             self.store.record_event(task_id, current.attempt_id, event)
+
+    def publish_worker_event(self, task_id: str, instance_id: str, summary: dict) -> PublicTaskEvent:
+        with self._lock:
+            if not isinstance(summary, dict):
+                raise TaskConflict("Invalid task worker event")
+            current = self.store.get(task_id)
+            if (current.instance_id != instance_id or current.state not in {
+                "running", "awaiting_approval", "verifying",
+            } or summary.get("attempt_id") != current.attempt_id):
+                raise TaskConflict("Stale task worker event")
+            event = project_task_event(summary, task_id, current.attempt_id, current.sequence + 1)
+            return self.store.record_event(task_id, current.attempt_id, event)
+
+    def _fixed_spec(self, task_id: str) -> TaskSpec:
+        spec = self._specs.get(task_id)
+        if spec is None:
+            spec = self.store.get_spec(task_id)
+            self._specs[task_id] = spec
+        return spec
+
+    def advance_worker_attempt(self, task_id: str, instance_id: str, expected_attempt: int) -> TaskRecord:
+        with self._lock:
+            current = self.store.get(task_id)
+            spec = self._fixed_spec(task_id)
+            if (current.instance_id != instance_id or current.state != "verifying"
+                    or current.attempt_id != expected_attempt
+                    or expected_attempt >= spec.max_attempts):
+                raise TaskConflict("Task attempt cannot advance")
+            if self.worker_controller is not None and self.worker_controller.broker is not None:
+                self.worker_controller.broker.invalidate_attempt(task_id, expected_attempt)
+            return self.store.transition(task_id, "verifying", "running", {})
+
+    def worker_start_payload(self, task_id: str) -> dict:
+        with self._lock:
+            record = self.store.get(task_id)
+            spec = self._fixed_spec(task_id)
+            work = self.store.root / task_id / "workspace" / "work"
+            if (record.state not in {"prepared", "running"} or spec is None
+                    or spec.task_id != task_id or not work.is_dir() or work.is_symlink()):
+                raise TaskConflict("Task has no runnable fixed specification")
+            return {
+                "description": spec.description,
+                "source_read_scope": list(spec.source_read_scope),
+                "source_write_scope": list(spec.source_write_scope),
+                "task_scratch_scope": spec.task_scratch_scope,
+                "max_attempts": spec.max_attempts,
+                "max_provider_calls": spec.max_provider_calls,
+                "max_total_tokens": spec.max_total_tokens,
+                "max_output_tokens_per_call": spec.max_output_tokens_per_call,
+                "verification_commands": list(spec.verification_commands),
+            }
+
+    def _record_execution_receipt(self, request: ExecutionRequest, result: dict) -> None:
+        controller = self.worker_controller
+        if (controller is None or type(result.get("exit_code")) is not int
+                or type(result.get("duration_ms")) is not int
+                or type(result.get("ok")) is not bool):
+            raise TaskConflict("Execution result has no receipt")
+        receipt = ExecutionReceipt(
+            attempt_id=request.attempt_id, command_request_id=request.command_request_id,
+            command_sha256=hashlib.sha256(request.command.encode("utf-8")).hexdigest(),
+            execution_digest=request.canonical_digest(), exit_code=result["exit_code"],
+            duration_ms=result["duration_ms"], ok=result["ok"],
+            output_truncated=result.get("output_truncated") is True,
+        )
+        self.store.record_execution_receipt(request.task_id, controller.instance_id, receipt)
+
+    def start_agent(self, task_id: str) -> TaskRecord:
+        """Start one prepared task only while the fixed local image is available."""
+        with self._lock:
+            controller = self.worker_controller
+            image = self.task_image_digest
+            if controller is None or image is None or controller.broker is None:
+                raise TaskConflict("Task execution capability is unavailable")
+            if not self.run_available():
+                raise TaskConflict("Fixed task image is unavailable")
+            self._fixed_spec(task_id)
+            record = controller.start(task_id)
+            work = self.store.root / task_id / "workspace" / "work"
+            try:
+                executor = IsolatedCommandExecutor(
+                    task_root=self.store.root, task_id=task_id, instance_id=controller.instance_id,
+                    image_digest=image, register_request=lambda request_id: controller.register_command(task_id, request_id),
+                    creation_guard=lambda request: controller.command_creation(task_id, request.attempt_id),
+                )
+                gateway = TaskCommandGateway(
+                    task_id=task_id, attempt_id=record.attempt_id, workspace=work,
+                    image_digest=image, broker=controller.broker, executor=executor,
+                    record_receipt=self._record_execution_receipt,
+                )
+                self.pool.submit(self.follow_worker, task_id, gateway)
+            except Exception as exc:
+                controller.finish(task_id, "failed", "worker_start_failed")
+                raise TaskConflict("Task worker could not start") from exc
+            return record
+
+    def follow_worker(self, task_id: str, gateway) -> TaskRecord:
+        controller = self.worker_controller
+        if controller is None:
+            raise TaskConflict("Task worker is unavailable")
+        with self._lock:
+            spec = self._fixed_spec(task_id)
+        initial = self.store.get(task_id)
+        if (initial.state != "running" or initial.instance_id != controller.instance_id
+                or initial.worker_pid is None or initial.worker_created_at is None):
+            raise TaskConflict("Task worker identity is unavailable")
+        identity = ProcessIdentity(initial.worker_pid, initial.worker_created_at)
+        instance_id = initial.instance_id
+
+        def on_event(summary: dict) -> None:
+            with self._lock:
+                current = self.store.get(task_id)
+                if (summary.get("kind") == "stage" and summary.get("phase") == "verifier"
+                        and current.state == "running" and summary.get("attempt_id") == current.attempt_id):
+                    self.store.transition(task_id, "running", "verifying", {})
+                self.publish_worker_event(task_id, instance_id, summary)
+
+        def on_command(request: dict) -> dict:
+            current = self.store.get(task_id)
+            if (current.instance_id != instance_id or current.attempt_id != request["attempt_id"]
+                    or current.state not in {"running", "awaiting_approval", "verifying"}):
+                return {"ok": False, "error": "stale_task_attempt"}
+            work = self.store.root / task_id / "workspace" / "work"
+            return gateway.run(
+                workspace=work, command=request["command"],
+                timeout_seconds=request["timeout_seconds"], max_output_chars=request["max_output_chars"],
+            )
+
+        def on_attempt(previous: int, next_attempt: int) -> None:
+            if next_attempt != previous + 1:
+                raise TaskConflict("Invalid task attempt")
+            gateway.set_attempt(next_attempt)
+            self.advance_worker_attempt(task_id, instance_id, previous)
+
+        def on_done(result: dict) -> None:
+            controller.finish(task_id, result["outcome"], result.get("failure_kind"))
+
+        deadline = Timer(spec.max_seconds, lambda: controller.finish(task_id, "timed_out", "timed_out"))
+        deadline.daemon = True
+        deadline.start()
+        try:
+            controller.launcher.follow(
+                identity, on_event, on_done, on_command=on_command, on_attempt=on_attempt,
+            )
+        except Exception:
+            controller.finish(task_id, "failed", "worker_failed")
+        finally:
+            deadline.cancel()
+            deadline.join()
+        return self.store.get(task_id)
 
     def demo_transition(self, task_id: str, expected: str, target: str, update: dict | None = None) -> TaskRecord:
         with self._lock:

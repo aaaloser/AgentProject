@@ -10,8 +10,16 @@ from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, Syst
 from langchain_core.tools import StructuredTool
 from langgraph.config import get_stream_writer
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
+from pydantic import ValidationError
 
 from mokioclaw.agents.code_agent import run_code_agent
+from mokioclaw.dashboard.task_executor import (
+    ReportedTaskToolFailure,
+    TaskExecutionError,
+    run_task_verification,
+)
+from mokioclaw.dashboard.task_events import task_tool_failure_event
+from mokioclaw.dashboard.task_tools import persist_todos_for_runtime
 from mokioclaw.agents.search_agent import run_search_agent
 from mokioclaw.graph.memory import (
     build_layered_memory,
@@ -23,11 +31,45 @@ from mokioclaw.graph.state import MokioGraphState, TodoItem, VerificationCheck
 from mokioclaw.prompts.stage3 import PLANNER_PROMPT, VERIFIER_PROMPT
 from mokioclaw.prompts.stage4 import CONTEXT_COMPRESSION_PROMPT
 from mokioclaw.providers.openai_provider import create_model
+from mokioclaw.providers.openai_provider import TaskProviderError
 from mokioclaw.tools import build_read_only_tools
-from mokioclaw.tools.todo_tool import persist_todos, write_todos
+from mokioclaw.tools.todo_tool import write_todos
 
 
 DEFAULT_CONTEXT_TOKEN_LIMIT = 400000
+
+
+def _model_for(state: MokioGraphState, *, stage: str | None = None):
+    context = state.get("task_context")
+    if context is not None:
+        runtime = state.get("runtime")
+        if runtime is not None and runtime.task_filesystem is not context.task_filesystem:
+            raise ValueError("task_filesystem_mismatch")
+        if stage is None:
+            raise ValueError("task_model_stage_required")
+        return context.model(stage=stage)
+    runtime = state.get("runtime")
+    if runtime is not None and runtime.task_filesystem is not None:
+        raise ValueError("task_model_required")
+    return create_model()
+
+
+def _tools_for(state: MokioGraphState, *, read_only: bool) -> list[StructuredTool]:
+    context = state.get("task_context")
+    if context is None:
+        runtime = state["runtime"]
+        if runtime.task_filesystem is not None:
+            raise ValueError("task_tools_required")
+        return build_read_only_tools(runtime) if read_only else []
+    runtime = state["runtime"]
+    if context.task_filesystem is None or context.task_filesystem is not runtime.task_filesystem:
+        raise ValueError("task_filesystem_mismatch")
+    if context.task_tools is None:
+        raise ValueError("task_tools_required")
+    if read_only:
+        names = {"FileReadTool", "GrepTool", "NotepadReadTool", "BashTool"}
+        return [tool for tool in context.task_tools if tool.name in names]
+    return context.task_tools
 
 AMIYA_TODOS = [
     "Research Amiya and collect reliable source links.",
@@ -88,7 +130,7 @@ def intent_router_node(state: MokioGraphState) -> dict[str, Any]:
     reason = "router fallback: default to workflow"
     confidence = 0.0
     try:
-        response = create_model().invoke(
+        response = _model_for(state, stage="entry").invoke(
             [
                 SystemMessage(content=INTENT_ROUTER_PROMPT),
                 HumanMessage(content=_router_input(state)),
@@ -105,6 +147,8 @@ def intent_router_node(state: MokioGraphState) -> dict[str, Any]:
             reason = str(parsed.get("reason") or "router returned low-confidence or invalid route")
             confidence = parsed_confidence
     except Exception as exc:
+        if state.get("task_context") is not None:
+            raise
         reason = f"router error: {type(exc).__name__}: {exc}"
 
     event = {
@@ -128,7 +172,7 @@ def intent_route_fn(state: MokioGraphState) -> str:
 def chat_responder_node(state: MokioGraphState) -> dict[str, Any]:
     writer = _get_writer()
     try:
-        response = create_model().invoke(
+        response = _model_for(state, stage="chat").invoke(
             [
                 SystemMessage(content=CHAT_RESPONDER_PROMPT),
                 HumanMessage(content=_chat_input(state)),
@@ -136,6 +180,8 @@ def chat_responder_node(state: MokioGraphState) -> dict[str, Any]:
         )
         text = str(getattr(response, "content", "") or "").strip()
     except Exception as exc:
+        if state.get("task_context") is not None:
+            raise
         text = f"这是轻量聊天分支，但模型回复暂不可用：{type(exc).__name__}: {exc}"
     if not text:
         text = "我在。你可以继续提问，或者直接描述一个需要我完成的任务。"
@@ -152,9 +198,16 @@ def chat_responder_node(state: MokioGraphState) -> dict[str, Any]:
 def planner_node(state: MokioGraphState) -> dict[str, Any]:
     writer = _get_writer()
     working_state: MokioGraphState = {**state}
+    context = working_state.get("task_context")
+    if context is not None:
+        _tools_for(working_state, read_only=False)
+        attempts = working_state.get("attempts", 0)
+        if attempts and working_state.get("verifier_explicit_failure") is not True:
+            raise TaskExecutionError("task_attempt_invalid")
+        context.begin_attempt(attempts + 1)
     if not working_state.get("todos"):
         _apply_plan(working_state, _default_plan(working_state["task"]))
-        persist_todos(
+        persist_todos_for_runtime(
             working_state["runtime"],
             working_state.get("todos", []),
             working_state.get("acceptance_criteria", []),
@@ -164,7 +217,7 @@ def planner_node(state: MokioGraphState) -> dict[str, Any]:
 
     memory = build_layered_memory(working_state, node="planner")
     writer(memory_event(memory, node="planner"))
-    model = create_model()
+    model = _model_for(working_state, stage="planner")
     planner = model.bind_tools(_build_planner_tools(working_state, writer))
     messages: list[Any] = [
         SystemMessage(content=PLANNER_PROMPT),
@@ -232,14 +285,28 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
         }
     )
 
-    model = create_model()
-    verifier = model.bind_tools(build_read_only_tools(state["runtime"]))
+    model = _model_for(state, stage="verifier")
+    verifier = model.bind_tools(_tools_for(state, read_only=True))
+    tool_events: list[dict[str, Any]] = []
+    context = state.get("task_context")
+    if context is not None:
+        for command_index, command in enumerate(context.fixed_verification_commands):
+            result = run_task_verification(context.task_gateway, state["runtime"].workspace, command)
+            if type(result.get("exit_code")) is not int:
+                raise TaskExecutionError("verification_command_failed")
+            actual = {**result, "command": command, "command_index": command_index}
+            event = {"type": "tool_result", "node": "verifier", "name": "BashTool", "result": actual}
+            tool_events.append(event)
+            writer(event)
     messages: list[Any] = [
         SystemMessage(content=VERIFIER_PROMPT),
         HumanMessage(content=_verifier_input(state, memory)),
     ]
+    if tool_events:
+        messages.append(HumanMessage(content=json.dumps(
+            [event["result"] for event in tool_events], ensure_ascii=False,
+        )))
     produced_messages: list[Any] = []
-    tool_events: list[dict[str, Any]] = []
 
     for _ in range(8):
         response = verifier.invoke(messages)
@@ -250,7 +317,7 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
             break
         for call in tool_calls:
             writer({"type": "tool_call", "node": "verifier", "name": call.get("name"), "args": call.get("args", {})})
-            tool_message = _execute_read_only_tool(state, call)
+            tool_message = _execute_read_only_tool(state, call, writer=writer)
             event = _tool_result_event(tool_message, node="verifier")
             tool_events.append(event)
             writer(event)
@@ -271,7 +338,12 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
             )
         )
 
-    parsed = _extract_json(_last_ai_content(produced_messages)) or {
+    parsed_response = _extract_json(_last_ai_content(produced_messages))
+    if state.get("task_context") is not None and (
+        not isinstance(parsed_response, dict) or type(parsed_response.get("passed")) is not bool
+    ):
+        raise TaskExecutionError("verifier_invalid")
+    parsed = parsed_response or {
         "passed": False,
         "reason": "Verifier did not return valid JSON.",
         "checks": [
@@ -284,7 +356,16 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
         "recommended_next_instruction": "Return valid verifier JSON after inspecting the result.",
     }
     checks = _normalize_checks(parsed.get("checks"))
-    passed = bool(parsed.get("passed"))
+    reported_passed = bool(parsed.get("passed"))
+    command_events = [
+        event for event in tool_events
+        if type(event.get("result", {}).get("exit_code")) is int
+    ]
+    actual_checks_passed = (
+        bool(command_events) and all(event["result"].get("ok") is True for event in command_events)
+        if context is not None else True
+    )
+    passed = reported_passed and actual_checks_passed
     reason = str(parsed.get("reason") or "")
     recommended = str(parsed.get("recommended_next_instruction") or "")
     attempts = state.get("attempts", 0) + 1
@@ -311,22 +392,28 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
 
     return {
         "messages": produced_messages,
-        "verification_results": _tool_events_to_verification_results(tool_events),
+        "verification_results": _tool_events_to_verification_results(
+            command_events if context is not None else tool_events,
+        ),
         "verification_checks": checks,
         "verifier_summary": reason,
         "passed": passed,
+        "verifier_explicit_failure": parsed.get("passed") is False if context is not None else False,
         "attempts": attempts,
         "last_error": last_error,
         "todos": todos,
         "memory_snapshot": memory,
         "history_summary": memory.get("history_summary_store", {}).get("history_summary", ""),
-        "context_next_node": verifier_route({**state, "passed": passed, "attempts": attempts}),
+        "context_next_node": verifier_route({
+            **state, "passed": passed, "attempts": attempts,
+            "verifier_explicit_failure": parsed.get("passed") is False if context is not None else False,
+        }),
     }
 
 
 def context_monitor_node(state: MokioGraphState) -> dict[str, Any]:
     writer = _get_writer()
-    token_limit = get_context_token_limit()
+    token_limit = get_context_token_limit(state)
     token_count = estimate_context_tokens(state)
     should_compress = token_count >= token_limit
     next_node = state.get("context_next_node") or "verifier"
@@ -412,6 +499,8 @@ def context_compressor_route(state: MokioGraphState) -> str:
 def verifier_route(state: MokioGraphState) -> str:
     if state.get("passed"):
         return "final"
+    if state.get("task_context") is not None and state.get("verifier_explicit_failure") is not True:
+        return "final"
     if state.get("attempts", 0) >= state.get("max_attempts", 3):
         return "final"
     return "planner"
@@ -447,7 +536,9 @@ def final_node(state: MokioGraphState) -> dict[str, Any]:
     return {"final_answer": final_answer}
 
 
-def get_context_token_limit() -> int:
+def get_context_token_limit(state: MokioGraphState | None = None) -> int:
+    if state is not None and state.get("task_context") is not None:
+        return DEFAULT_CONTEXT_TOKEN_LIMIT
     load_dotenv()
     raw = os.getenv("MOKIO_CONTEXT_TOKEN_LIMIT", str(DEFAULT_CONTEXT_TOKEN_LIMIT))
     try:
@@ -461,8 +552,11 @@ def estimate_context_tokens(state: MokioGraphState) -> int:
     messages = list(state.get("messages", []))
     payload = build_layered_memory(state, node="context_monitor")
     payload_message = HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str))
+    if state.get("task_context") is not None:
+        text = "\n".join(_message_text(message) for message in messages)
+        return max(1, len(text + payload_message.content) // 4)
     try:
-        model = create_model()
+        model = _model_for(state)
         return int(model.get_num_tokens_from_messages(messages + [payload_message]))
     except Exception:
         text = "\n".join(_message_text(message) for message in messages)
@@ -471,16 +565,30 @@ def estimate_context_tokens(state: MokioGraphState) -> int:
 
 
 def _build_planner_tools(state: MokioGraphState, writer) -> list[StructuredTool]:
+    if state.get("task_context") is None:
+        def todo_func(todos, acceptance_criteria, verification_commands, plan_summary=""):
+            return _todo_write_tool(
+                state, writer, todos, acceptance_criteria, verification_commands, plan_summary
+            )
+        todo_description = (
+            "Publish or revise plan state. Args: todos, acceptance_criteria, "
+            "verification_commands, optional plan_summary."
+        )
+    else:
+        def todo_func(todos, acceptance_criteria, verification_commands=None, plan_summary=""):
+            return _todo_write_tool(
+                state, writer, todos, acceptance_criteria, verification_commands, plan_summary
+            )
+        todo_description = (
+            "Publish or revise plan state. Args: todos, acceptance_criteria, "
+            "optional plan_summary. Verification commands are fixed by the task; "
+            "a supplied verification_commands value is ignored."
+        )
     tools = [
         StructuredTool.from_function(
             name="TodoWriteTool",
-            func=lambda todos, acceptance_criteria, verification_commands, plan_summary="": _todo_write_tool(
-                state, writer, todos, acceptance_criteria, verification_commands, plan_summary
-            ),
-            description=(
-                "Publish or revise plan state. Args: todos, acceptance_criteria, "
-                "verification_commands, optional plan_summary."
-            ),
+            func=todo_func,
+            description=todo_description,
         ),
         StructuredTool.from_function(
             name="CallCodeAgentTool",
@@ -508,13 +616,20 @@ def _todo_write_tool(
     verification_commands: Any,
     plan_summary: str = "",
 ) -> dict[str, Any]:
-    result = write_todos(todos, acceptance_criteria, verification_commands)
+    context = state.get("task_context")
+    if context is None:
+        result = write_todos(todos, acceptance_criteria, verification_commands)
+    else:
+        fixed_commands = list(context.fixed_verification_commands)
+        result = write_todos(todos, acceptance_criteria, fixed_commands)
+        result["ok"] = bool(result["todos"] and result["acceptance_criteria"])
+        result["verification_commands"] = fixed_commands
     if result.get("ok"):
         state["plan_summary"] = plan_summary or state.get("plan_summary") or "MultiAgent plan"
         state["todos"] = _todo_items(result["todos"], existing=state.get("todos", []))
         state["acceptance_criteria"] = result["acceptance_criteria"]
         state["verification_commands"] = result["verification_commands"]
-        persist_todos(
+        persist_todos_for_runtime(
             state["runtime"],
             state["todos"],
             state["acceptance_criteria"],
@@ -562,7 +677,14 @@ def _call_search_agent_tool(state: MokioGraphState, writer, instruction: str) ->
 
 def _call_code_agent_tool(state: MokioGraphState, writer, instruction: str) -> dict[str, Any]:
     writer({"type": "handoff", "from": "planner", "to": "codeAgent", "instruction": instruction})
-    result = run_code_agent(state, instruction, writer=writer)
+    context = state.get("task_context")
+    if context is None:
+        result = run_code_agent(state, instruction, writer=writer)
+    else:
+        result = run_code_agent(
+            state, instruction, writer=writer,
+            tools_override=_tools_for(state, read_only=False), model_override=context.model(stage="code_agent"),
+        )
     state["todos"] = result.get("todos", state.get("todos", []))
     state["code_agent_summary"] = result.get("summary", "")
     state["last_actor_summary"] = result.get("summary", "")
@@ -589,7 +711,20 @@ def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) 
         try:
             result = tool.invoke(args)
         except Exception as exc:
+            if state.get("task_context") is not None:
+                if isinstance(exc, (TaskProviderError, ReportedTaskToolFailure)):
+                    raise
+                if isinstance(exc, TaskExecutionError):
+                    writer(task_tool_failure_event("planner", name, exception=True))
+                    raise
+                writer(task_tool_failure_event("planner", name,
+                                               invalid_arguments=isinstance(exc, ValidationError),
+                                               exception=not isinstance(exc, ValidationError)))
+                raise TaskExecutionError("task_tool_failed") from None
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if state.get("task_context") is not None and isinstance(result, dict) and result.get("ok") is False:
+        writer(task_tool_failure_event("planner", name, error=result.get("error")))
+        raise TaskExecutionError("task_tool_failed")
     tool_message = ToolMessage(
         content=json.dumps(result, ensure_ascii=False),
         name=name,
@@ -599,10 +734,10 @@ def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) 
     return tool_message
 
 
-def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any]) -> ToolMessage:
+def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any], *, writer=None) -> ToolMessage:
     name = call.get("name", "")
     args = call.get("args") or {}
-    tools = {tool.name: tool for tool in build_read_only_tools(state["runtime"])}
+    tools = {tool.name: tool for tool in _tools_for(state, read_only=True)}
     tool = tools.get(name)
     if tool is None:
         result = {"ok": False, "error": f"unknown tool: {name}"}
@@ -610,7 +745,20 @@ def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any]) -> Too
         try:
             result = tool.invoke(args)
         except Exception as exc:
+            if state.get("task_context") is not None:
+                if writer is not None:
+                    writer(task_tool_failure_event("verifier", name,
+                                                   invalid_arguments=isinstance(exc, ValidationError),
+                                                   exception=not isinstance(exc, ValidationError)))
+                raise TaskExecutionError("task_tool_failed") from None
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if state.get("task_context") is not None and isinstance(result, dict):
+        if result.get("ok") is False and type(result.get("exit_code")) is not int:
+            if writer is not None:
+                writer(task_tool_failure_event("verifier", name, error=result.get("error")))
+            raise TaskExecutionError("task_tool_failed")
+        if name == "BashTool":
+            result = {**result, "command": args.get("command", "")}
     return ToolMessage(
         content=json.dumps(result, ensure_ascii=False),
         name=name,
@@ -630,11 +778,13 @@ def _compress_context_with_model(state: MokioGraphState) -> dict[str, Any]:
         HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
     ]
     try:
-        response = create_model().invoke(messages)
+        response = _model_for(state, stage="context_compressor").invoke(messages)
         parsed = _extract_json(str(response.content))
         if parsed:
             return parsed
     except Exception as exc:
+        if state.get("task_context") is not None:
+            raise
         return _fallback_compression(state, error=f"{type(exc).__name__}: {exc}")
     return _fallback_compression(state, error="compressor model did not return valid JSON")
 
@@ -840,6 +990,8 @@ def _tool_events_to_verification_results(events: list[dict[str, Any]]) -> list[d
                 "exit_code": result.get("exit_code"),
                 "stdout": str(result.get("stdout", "")),
                 "stderr": str(result.get("stderr") or result.get("error", "")),
+                "command_request_id": result.get("command_request_id"),
+                "duration_ms": result.get("duration_ms"),
             }
         )
     return results

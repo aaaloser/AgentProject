@@ -36,6 +36,18 @@ class PublicTaskEvent:
 
 
 @dataclass(frozen=True)
+class ExecutionReceipt:
+    attempt_id: int
+    command_request_id: str
+    command_sha256: str
+    execution_digest: str
+    exit_code: int
+    duration_ms: int
+    ok: bool
+    output_truncated: bool
+
+
+@dataclass(frozen=True)
 class TaskRecord:
     task_id: str
     repo_id: str
@@ -54,6 +66,42 @@ class TaskRecord:
     worker_created_at: str | None = None
     instance_id: str | None = None
     owned_request_ids: tuple[str, ...] = ()
+    execution_receipts: tuple[ExecutionReceipt, ...] = ()
     execution_started: bool = False
     cleanup_confirmed: bool = False
     events: tuple[PublicTaskEvent, ...] = ()
+
+
+@dataclass(frozen=True)
+class PublicPatchSummary:
+    status: str
+    changed_files: int = 0
+    added_lines: int = 0
+    deleted_lines: int = 0
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    attempt_id: int
+    command: str
+    command_request_id: str | None
+    exit_code: int | None
+    duration_ms: int | None
+    status: str
+    output_redacted: bool
+    output_truncated: bool
+
+
+@dataclass(frozen=True)
+class TaskResult:
+    task_id: str
+    repo_id: str
+    base_sha: str
+    status: str
+    failure_kind: str | None
+    changed_files: tuple[str, ...]
+    patch_summary: PublicPatchSummary
+    verification_status: str
+    verification_results: tuple[VerificationResult, ...]
+    limitations: tuple[str, ...]

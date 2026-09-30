@@ -1,0 +1,37 @@
+diff --git a/src/mokioclaw/tools/grep_tool.py b/src/mokioclaw/tools/grep_tool.py
+--- a/src/mokioclaw/tools/grep_tool.py
++++ b/src/mokioclaw/tools/grep_tool.py
+@@ -15,6 +15,8 @@ SKIP_DIRS = {".git", ".mokioclaw", ".venv", "__pycache__", ".pytest_cache"}
+ def _iter_files(root: Path, glob_pattern: str | None) -> list[Path]:
+     files: list[Path] = []
+     for path in root.rglob("*"):
++        if path.is_symlink():
++            continue
+         if not path.is_file():
+             continue
+         if any(part in SKIP_DIRS for part in path.parts):
+diff --git a/tests/test_tools.py b/tests/test_tools.py
+--- a/tests/test_tools.py
++++ b/tests/test_tools.py
+@@ -113,6 +113,21 @@ def test_grep_finds_matches(tmp_path: Path) -> None:
+     assert result["matches"][0]["line"] == 1
+ 
+ 
++def test_grep_does_not_follow_file_symlink_outside_workspace(tmp_path: Path) -> None:
++    state = make_state(tmp_path)
++    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
++    outside.write_text("BOUNDARY_NEEDLE\n", encoding="utf-8")
++    (tmp_path / "outside-link.txt").symlink_to(outside)
++    (tmp_path / "inside.txt").write_text("BOUNDARY_NEEDLE\n", encoding="utf-8")
++
++    result = grep(state, "BOUNDARY_NEEDLE")
++
++    assert result["ok"] is True
++    assert [(match["path"], match["line"]) for match in result["matches"]] == [
++        ("inside.txt", 1),
++    ]
++
++
+ def test_bash_runs_command_inside_workspace(tmp_path: Path) -> None:
+     state = make_state(tmp_path)
+     (tmp_path / "hello.py").write_text("print('hello from smoke')\n", encoding="utf-8")

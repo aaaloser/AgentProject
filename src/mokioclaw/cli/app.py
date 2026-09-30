@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -159,15 +160,27 @@ def dashboard(
         typer.Option("--repo", help="Local Git repository to display. Repeat for multiple repositories; defaults to the current directory."),
     ] = None,
     no_browser: Annotated[bool, typer.Option("--no-browser", help="Start the local read-only service without opening a browser.")] = False,
-    task_root: Annotated[Path | None, typer.Option("--task-root", help="Store isolated local task copies here; Agent execution stays disabled.")] = None,
+    task_root: Annotated[Path | None, typer.Option("--task-root", help="Store isolated local task copies here.")] = None,
+    task_image: Annotated[str | None, typer.Option("--task-image", help="Fixed local Docker image digest for explicitly enabled Agent tasks.")] = None,
+    enable_agent: Annotated[bool, typer.Option("--enable-agent", help="Enable individually confirmed local Agent tasks.")] = False,
 ) -> None:
     """Browse commits and review priority for explicitly selected local Git repositories."""
     from mokioclaw.dashboard.catalog import CatalogRegistrationError
     from mokioclaw.dashboard.launcher import launch_dashboard
 
     try:
+        if enable_agent and (task_root is None or task_image is None
+                             or re.fullmatch(r"sha256:[0-9a-f]{64}", task_image) is None):
+            safe_secho("Agent mode requires --task-root and a valid --task-image digest.", fg=typer.colors.RED)
+            raise typer.Exit(2)
+        if task_image is not None and not enable_agent:
+            safe_secho("--task-image requires --enable-agent.", fg=typer.colors.RED)
+            raise typer.Exit(2)
         if task_root is None:
             launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser)
+        elif enable_agent:
+            launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser,
+                             task_root=task_root, task_image=task_image, enable_agent=True)
         else:
             launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser, task_root=task_root)
     except CatalogRegistrationError as exc:

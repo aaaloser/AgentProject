@@ -68,6 +68,133 @@ def test_legacy_get_contract_and_no_task_root(temp_git_repo: Path) -> None:
     assert response.status_code == 503 and response.json()["code"] == "task_unavailable"
 
 
+def test_approval_api_exposes_only_pending_policy_and_requires_exact_decision(task_api, monkeypatch) -> None:
+    client, headers, service, _, _, _, _ = task_api
+    task_id = "task_1234567890123456"
+    request_id = "request_12345678901234"
+    digest = "a" * 64
+    decisions = []
+    monkeypatch.setattr(service, "get", lambda _task_id: object())
+    monkeypatch.setattr(service, "pending_approvals", lambda _task_id: [{
+        "attempt_id": 1, "command_request_id": request_id, "execution_digest": digest,
+        "command": "echo fake", "image_digest": "sha256:" + "b" * 64,
+    }])
+    monkeypatch.setattr(service, "decide_approval", lambda *args: (decisions.append(args) or True))
+    response = client.get(f"/api/tasks/{task_id}/approvals")
+    assert response.status_code == 200
+    assert response.json()["approvals"][0]["command"] == "echo fake"
+    assert client.post(f"/api/tasks/{task_id}/approvals/{request_id}", headers=headers,
+                       json={"attempt_id": 1, "execution_digest": digest,
+                             "approved": True, "extra": "private"}).status_code == 400
+    assert decisions == []
+    assert client.post(f"/api/tasks/{task_id}/approvals/{request_id}", headers=headers,
+                       json={"attempt_id": 1, "execution_digest": digest,
+                             "approved": True}).status_code == 200
+    assert decisions == [(task_id, 1, request_id, digest, True)]
+
+
+def test_prepared_task_can_be_cancelled_without_agent_or_docker(task_api, monkeypatch) -> None:
+    from mokioclaw.providers.openai_provider import ProviderSettings
+    from mokioclaw.dashboard import task_executor
+
+    client, headers, service, _, _, repo_id, sha = task_api
+    monkeypatch.setattr(task_executor.DockerCLI, "run", lambda *_args, **_kwargs:
+                        pytest.fail("Docker contacted"))
+    preview = _preview(client, headers, repo_id, sha).json()
+    response = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "cancel-prepared"},
+                           json=_task_payload(preview, repo_id, sha))
+    task_id = response.json()["task_id"]
+    deadline = time.monotonic() + 5
+    while service.get(task_id).state == "preparing" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert service.get(task_id).state == "prepared"
+    service.configure_agent(ProviderSettings("FAKE", "fake-model", "https://task.invalid/v1"),
+                            "sha256:" + "a" * 64)
+    cancelled = client.post(f"/api/tasks/{task_id}/cancel", headers=headers, json={})
+    assert cancelled.status_code == 202
+    assert cancelled.json()["state"] == "cancelled"
+    assert service.get(task_id).cleanup_confirmed
+
+
+def test_prepared_task_restores_private_runtime_limits_after_dashboard_restart(task_api) -> None:
+    from mokioclaw.dashboard.task_service import TaskService
+
+    client, headers, service, catalog, reader, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    response = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "restart-prepared"},
+                           json=_task_payload(preview, repo_id, sha))
+    task_id = response.json()["task_id"]
+    deadline = time.monotonic() + 5
+    while service.get(task_id).state == "preparing" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert service.get(task_id).state == "prepared"
+    service.close()
+    reopened = TaskService(catalog, reader, service.task_root)
+    try:
+        payload = reopened.worker_start_payload(task_id)
+        assert payload["description"] == "Update the source file"
+        assert payload["max_provider_calls"] == 1
+    finally:
+        reopened.close()
+
+
+def test_result_api_exposes_bounded_summary_only_after_cleanup(task_api) -> None:
+    from mokioclaw.dashboard.task_service import TaskService
+
+    client, headers, service, catalog, reader, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    created = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "result-summary"},
+                          json=_task_payload(preview, repo_id, sha)).json()
+    task_id = created["task_id"]
+    deadline = time.monotonic() + 5
+    while service.get(task_id).state == "preparing" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert service.get(task_id).state == "prepared"
+    assert client.get(f"/api/tasks/{task_id}/result").status_code == 409
+    work = service.prepared(task_id).work
+    (work / "src" / "a.py").write_text("modified private content\n", encoding="utf-8")
+    service.store.transition(task_id, "prepared", "running", {})
+    service.store.transition(task_id, "running", "stopping", {})
+    service.store.transition(task_id, "stopping", "completed", {"cleanup_confirmed": True})
+    response = client.get(f"/api/tasks/{task_id}/result")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["base_sha"] == sha and result["status"] == "completed"
+    assert result["changed_files"] == ["src/a.py"]
+    assert result["verification_status"] == "not_run"
+    assert result["patch_summary"]["status"] == "available"
+    assert "modified private content" not in response.text
+    assert str(work) not in response.text
+    assert client.get("/api/tasks/invalid/result").status_code == 404
+    (work / "src" / "a.py").write_text("later local edit\nsecond line\n", encoding="utf-8")
+    assert client.get(f"/api/tasks/{task_id}/result").json() == result
+    service.close()
+    reopened = TaskService(catalog, reader, service.task_root)
+    try:
+        assert reopened.result(task_id).changed_files == ("src/a.py",)
+        assert reopened.result(task_id).patch_summary.added_lines == result["patch_summary"]["added_lines"]
+    finally:
+        reopened.close()
+
+
+def test_cleanup_failed_is_not_a_final_result(task_api) -> None:
+    client, headers, service, _, _, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    created = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "cleanup-pending"},
+                          json=_task_payload(preview, repo_id, sha)).json()
+    task_id = created["task_id"]
+    deadline = time.monotonic() + 5
+    while service.get(task_id).state == "preparing" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert service.get(task_id).state == "prepared"
+    service.store.transition(task_id, "prepared", "running", {})
+    service.store.transition(task_id, "running", "stopping", {})
+    service.store.transition(task_id, "stopping", "cleanup_failed", {"failure_kind": "cleanup_failed"})
+    response = client.get(f"/api/tasks/{task_id}/result")
+    assert response.status_code == 409 and response.json()["code"] == "result_unavailable"
+    assert not (service.store.root / task_id / "result.json").exists()
+
+
 @pytest.mark.parametrize("headers,body", [
     ({}, {}),
     ({"Origin": "http://evil.invalid"}, {}),
@@ -171,3 +298,50 @@ def test_run_gate_and_busy_state(task_api) -> None:
     service.store.transition(first, "prepared", "running", {})
     assert client.post(f"/api/tasks/{second}/run", headers=headers, json={}).status_code == 409
     assert client.post(f"/api/tasks/{first}/run", headers=headers, json={}).status_code == 503
+
+
+def test_real_run_requires_local_image_and_exposes_fixed_review_policy(task_api, monkeypatch) -> None:
+    from dataclasses import replace
+    from subprocess import CompletedProcess
+
+    from mokioclaw.providers.openai_provider import ProviderSettings
+    from mokioclaw.dashboard.task_executor import DockerCLI
+
+    client, headers, service, _, _, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    payload = _task_payload(preview, repo_id, sha)
+    payload["verification_commands"] = ["python -m pytest -q"]
+    created = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "real-run-gate"}, json=payload)
+    task_id = created.json()["task_id"]
+    deadline = time.monotonic() + 5
+    while service.get(task_id).state == "preparing" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert service.get(task_id).state == "prepared"
+    image = "sha256:" + "a" * 64
+    service.configure_agent(ProviderSettings("FAKE_PRIVATE_KEY", "fake-model", "https://task.invalid/v1?secret=FAKE"), image)
+    monkeypatch.setattr(DockerCLI, "run", lambda *_args, **_kwargs:
+                        CompletedProcess([], 1, "", "unavailable"))
+    assert client.get("/api/task-session").json()["run_available"] is False
+    assert client.post(f"/api/tasks/{task_id}/run", headers=headers, json={}).status_code == 503
+    assert service.get(task_id).state == "prepared"
+
+    monkeypatch.setattr(DockerCLI, "run", lambda *_args, **_kwargs:
+                        CompletedProcess([], 0, image + "\n", ""))
+    assert client.get("/api/task-session").json()["run_available"] is True
+    policy_response = client.get(f"/api/tasks/{task_id}/run-policy")
+    assert policy_response.status_code == 200
+    policy = policy_response.json()
+    assert policy["task_id"] == task_id and policy["base_sha"] == sha
+    assert policy["model"] == "fake-model" and policy["image_digest"] == image
+    assert policy["source_read_scope"] == ["src/"]
+    assert policy["verification_commands"] == ["python -m pytest -q"]
+    assert policy["max_provider_calls"] == 1 and policy["max_total_tokens"] == 1000
+    assert policy["network"] == "none"
+    assert "FAKE_PRIVATE_KEY" not in policy_response.text and "task.invalid" not in policy_response.text
+
+    called = []
+    monkeypatch.setattr(service, "start_agent", lambda requested:
+                        (called.append(requested) or replace(service.get(requested), state="running")))
+    started = client.post(f"/api/tasks/{task_id}/run", headers=headers, json={})
+    assert started.status_code == 202 and started.json()["state"] == "running"
+    assert called == [task_id]
