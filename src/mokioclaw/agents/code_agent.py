@@ -32,8 +32,10 @@ Rules:
   Read those existing files with FileReadTool before editing; avoid broad
   discovery and repeated reads when the needed content is already available.
 - Make the smallest in-scope change promptly with FileEditTool for focused
-  edits. FileWriteTool may replace an existing in-scope file only; it cannot
-  create a new file in this task mode.
+  edits. For a small file, prefer FileWriteTool and rewrite the file in full.
+  FileEditTool old_text must match exactly once, copied verbatim without the
+  line-number prefixes from FileReadTool. FileWriteTool may replace an existing
+  in-scope file only; it cannot create a new file in this task mode.
 - Run the relevant supplied checks after editing. Use BashTool only for
   non-interactive commands and follow its current-platform shell description.
 - Update an existing todo with TodoUpdateTool when its status materially
@@ -174,10 +176,18 @@ def execute_code_agent_tool(
                     raise failure("task_tool_failed") from None
                 result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         if runtime is not None and runtime.task_filesystem is not None and result.get("ok") is False:
-            if writer is not None:
-                writer(task_tool_failure_event("codeAgent", name, error=result.get("error")))
-            failure = ReportedTaskToolFailure if writer is not None else TaskExecutionError
-            raise failure("task_tool_failed")
+            retryable = (result.get("error") in {"task_edit_match_failed", "invalid_task_command"}
+                         or str(result.get("error", "")).startswith("unknown tool:")) or (
+                # A command that actually executed and returned a non-zero exit
+                # is normal iteration input for the model, not a tool failure.
+                # Gateway-level Bash failures keep their "error" field and terminate.
+                name == "BashTool" and "error" not in result and type(result.get("exit_code")) is int
+            )
+            if not retryable:
+                if writer is not None:
+                    writer(task_tool_failure_event("codeAgent", name, error=result.get("error")))
+                failure = ReportedTaskToolFailure if writer is not None else TaskExecutionError
+                raise failure("task_tool_failed")
     tool_call_id = call.get("id") or f"{name}-call"
     return ToolMessage(content=json.dumps(result, ensure_ascii=False), name=name, tool_call_id=tool_call_id), todos
 

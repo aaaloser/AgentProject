@@ -23,6 +23,10 @@ MAX_DIRECTORIES = 5000
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_PATCH_BYTES = 32 * 1024 * 1024
+# Runtime noise written by interpreter/test tools inside the work mount; both
+# baseline and work prune it symmetrically so it never becomes a patch change.
+_RUNTIME_NOISE_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache"})
+_RUNTIME_NOISE_SUFFIXES = (".pyc", ".pyo")
 _SUSPECTED_SECRET = re.compile(
     rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
     rb"(?i:(?:api[_-]?key|secret|access[_-]?token|authorization))\s*[:=]\s*[\"']?[^\s\"']{12,}"
@@ -65,11 +69,15 @@ def _scan(root: Path) -> dict[str, int]:
                 ):
                     raise PatchUnsafe("link_in_workspace")
                 if stat.S_ISDIR(info.st_mode):
+                    if entry.name in _RUNTIME_NOISE_DIRECTORIES:
+                        continue
                     directory_count += 1
                     if directory_count > MAX_DIRECTORIES:
                         raise PatchUnsafe("workspace_limit_exceeded")
                     pending.append((Path(entry.path), relative + "/"))
                 elif stat.S_ISREG(info.st_mode):
+                    if entry.name.endswith(_RUNTIME_NOISE_SUFFIXES):
+                        continue
                     if info.st_size > MAX_FILE_BYTES:
                         raise PatchUnsafe("file_too_large")
                     files[relative] = info.st_size

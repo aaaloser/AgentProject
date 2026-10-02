@@ -245,6 +245,17 @@ class RemoteTaskGateway:
     def run(self, *, workspace: Path, command: str, timeout_seconds: int, max_output_chars: int) -> dict:
         if Path(workspace).resolve(strict=False) != self.workspace:
             return {"ok": False, "error": "task_workspace_mismatch"}
+        try:
+            command_bytes = command.encode("utf-8", errors="strict")
+        except UnicodeError:
+            return {"ok": False, "error": "invalid_task_command"}
+        # Mirror the parent-side gateway limits here so a model-supplied argument
+        # cannot crash the whole task against the command message validation.
+        if (type(command) is not str or not command.strip() or "\x00" in command
+                or len(command_bytes) > 8192
+                or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600
+                or type(max_output_chars) is not int or not 1 <= max_output_chars <= 12000):
+            return {"ok": False, "error": "invalid_task_command"}
         _send(self.channel, {
             "kind": "command_request", "attempt_id": self.attempt_id, "command": command,
             "timeout_seconds": timeout_seconds, "max_output_chars": max_output_chars,

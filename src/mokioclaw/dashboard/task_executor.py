@@ -182,6 +182,7 @@ class IsolatedCommandExecutor:
             "--read-only", "--user", "65534:65534",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
             "--mount", f"type=bind,src={work},dst=/workspace", "--workdir", "/workspace",
+            "--env", "PYTHONDONTWRITEBYTECODE=1",
             "--entrypoint", "/bin/sh", self.image_digest, "-c", request.command,
         ]
         started = time.perf_counter()

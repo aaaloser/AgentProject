@@ -736,3 +736,24 @@ def test_live_approval_is_bound_to_current_attempt_and_restores_state(
                                            request.canonical_digest(), True)
     finally:
         service.close()
+
+
+def test_worker_gateway_rejects_invalid_command_arguments_before_sending(tmp_path: Path) -> None:
+    left, right = socket.socketpair()
+    right.settimeout(1)
+    left.settimeout(1)
+    task_id = "task_1234567890123456"
+    gateway = task_worker.RemoteTaskGateway(right, task_id, tmp_path)
+    try:
+        for timeout, output in ((1200, 100), (0, 100), (5, 0), (5, 20000)):
+            result = gateway.run(workspace=tmp_path, command="echo fake",
+                                 timeout_seconds=timeout, max_output_chars=output)
+            assert result == {"ok": False, "error": "invalid_task_command"}
+        result = gateway.run(workspace=tmp_path, command="echo fake\0x",
+                             timeout_seconds=5, max_output_chars=100)
+        assert result == {"ok": False, "error": "invalid_task_command"}
+        with pytest.raises(socket.timeout):
+            left.recv(1)
+    finally:
+        left.close()
+        right.close()

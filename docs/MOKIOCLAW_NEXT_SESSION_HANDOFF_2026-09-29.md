@@ -161,3 +161,64 @@
 只读审查私有任务补丁发现它以 `str(resolved).startswith(str(root.resolve()))` 判定链接目标是否仍在范围内。无 provider 的固定 Linux 镜像临时夹具证明：工作目录 `work` 中指向兄弟目录 `work-extra` 的文件链接仍被读取，并返回越界内容。先检查再打开的替换竞态也未消除，因此补丁不是完整链接修复；其新增测试只覆盖普通的静态越界链接。对隔离 work 的**独立只读容器验证**执行原固定 pytest 命令得 **42 passed、2 deselected**，另有只读挂载造成的缓存警告；这不能改写 Agent 任务的 `not_run` 状态，也不能抵消越界探针。对干净 baseline 的 `git apply --check --whitespace=error-all` 报告补丁新增的两处尾随空格。补丁未应用到来源或阶段 B 冻结源码。
 
 试点来源 HEAD 仍为 `4ca74f958301228cb48cb1e9c7d15463fa1d8e74`、本地 `origin/master` 关系 0/0、index SHA-256 仍为 `80809046112C918D18367AEFEB36A318A39BD5E8EC764D00178B539E1ADA1BF4`，仅保留原有未跟踪文档。主项目与阶段 B HEAD 亦未改变；既有未提交内容保留。没有读取 `.env` 值、补跑正式 Rich/Click 槽位、改写冻结／ignored 证据、应用补丁到来源、提交、push 或修改远端。再次真实运行须有新的次数授权，不能把本轮结果表述为 Grep 缺陷已修复。
+
+## 19. 2026-09-30 无 provider 完成完整 Grep 链接边界与 tool_rejected 调查
+
+本轮按根 `SKILL.md` 完整重读 V1 与阶段 B 两份设计、瓶颈文档、交接全文及技术进度 §51–56 后进行，全程无 provider、无真实 Agent、无 Docker。**只读重新核对的三处 Git 状态与旧快照不同**：阶段 B 工作树的原有未提交内容已提交为 `dc9f016`（工作树当前干净，docs 已到 §56），分支 `codex/mokioclaw-stage-b` 相对本地 `origin/main` 为 2/0；主项目 `main=4134081c0a8fc4786aa28b1e33fe060d69ddcfd5`，比该分支多两个**纯文档**提交（`c943ca8` 瓶颈汇总、`4134081` 演示说明与 real_test.md），代码无差异；试点来源仍为 `4ca74f95…`、与本地 `origin/master` 0/0、仅原有未跟踪文档。未 fetch，以上为本地远端跟踪引用关系。
+
+**完整 Grep 链接边界（隔离副本，非阶段 B 冻结源码）。** 复制最后一次真实任务 `6QKRh-…` 的 `workspace/work`（含其 +32/-0 部分补丁）到 `D:\agent work\project\MokioAgent-task10-private\grep-boundary-dev-20260930\work` 作为开发副本。按设计实现了四层边界：路径参数沿用 `resolve_workspace_path()`（`parents` 包含判断）并把越界 `ValueError` 转为 `ok:False`；枚举弃用 `rglob`，改为显式 `os.scandir` 递归——每个目录在列出前后各做一次"逐组件 `lstat` 到 workspace 根（含）"的链核实、前后身份不一致即丢弃该列表，任何 reparse point（POSIX symlink；Windows symlink/junction/全部 reparse，经 `st_reparse_tag`）条目整体跳过且目录链接不递归，普通文件记录 `(st_dev, st_ino)` 身份；打开时 `os.open` 后用 `os.fstat` 核实"普通文件 + 身份与枚举一致"才读取，把检查到打开的替换竞态转化为对已打开对象的核实；显式单文件路径另加 `realpath` 包含复检。身份不可用（`(0,0)`）一律 fail-closed 跳过并以 `skipped_insecure` 计数。Windows 关键实现发现：`DirEntry.stat(follow_symlinks=False)` 在本机返回 `dev=0, ino=0`（dirent 数据无文件 ID），必须用 `os.lstat(entry.path)` 取身份，否则 fail-closed 会跳过全部文件。
+
+**测试先红后绿（区分独立测试与 Agent 固定验证）。** 新增 10 个边界测试（文件链接、目录链接、兄弟目录 `work`/`work-extra` 前缀、`os.open` 时点文件替换竞态、`os.scandir` 时点目录真实替换竞态、打开对象身份不匹配、显式越界路径、指向越界的链接参数、显式普通文件回归；全部使用与越界内容相同的搜索词）。部分补丁状态上红色 **6 failed、3 skipped、43 passed**：junction 兄弟目录、目录链接、打开身份不匹配、显式越界路径、链接参数越界均真实失败（junction 在本机可创建且 3.13 `rglob` 会进入 junction），Agent 原有 symlink 测试因本机无 symlink 权限直接 OSError（已补能力门控）。修复后绿色 **48 passed、4 skipped、2 deselected**，4 个 skip 均为本机无 symlink 权限的门控（含 Agent 原测试）；试点副本内其余可运行测试（test_checkpoint、test_session）**11 passed**。对干净 baseline 的 `git apply --check --whitespace=error-all` **通过**（并清理了部分补丁引入的两处尾随空格）；以阶段 B ruff 配置检查两个改动文件通过。可审阅补丁：`grep-boundary-dev-20260930/patchcheck/grep-boundary-complete.patch`。**这些是独立测试，Agent 固定验证仍为 not_run**；symlink 专属的三个门控测试（静态文件链接、前缀文件链接、打开时点 symlink 替换）在本机无法执行，需 POSIX/Docker 环境复核。目录列表中途替换测试在旧实现上空转（3.13 `rglob` 不经过可拦截的 Python 级枚举调用），其旧实现越界由静态 junction 测试证明。
+
+**FileEditTool / tool_rejected 调查（假模型，无 provider）。** 用真实 `TaskFilesystem` + 任务工具包装器 + `execute_code_agent_tool` 的一次性探针确认：公开 `FileEditTool / tool_rejected` 当且仅当调用 schema 合法、`old_text` 非空、目标路径在范围内且可读（否则为 `scope_denied`）、且 `old_text` 出现次数≠1（0 次或 ≥2 次）；schema 参数错误为 `invalid_arguments`。可复现同签名机制类：带 `FileReadTool` 行号前缀的片段、CRLF/LF 不一致、片段出现两次、上次编辑后的过期片段——任一都会**立即终止整个 attempt**（任务工具失败是终止性的，模型在 attempt 内无重试机会）。端到端事件恰为 `{"type":"task_tool_failure","node":"codeAgent","name":"FileEditTool","failure_category":"tool_rejected"}`，无参数、路径或片段泄漏。分类实现无缺陷；任务提示词未复述"old_text 须逐字唯一匹配"（仅工具描述提及）——修改提示或把匹配失败改为非终止性都属于设计变更，未经批准不实施。**不能据此断定最后一次真实任务的具体编辑内容或失败原因。**
+
+**阶段 B 验证与环境漂移。** 全项目非 Docker 回归（指定 Python、显式 `PYTHONPATH=src`、`%TEMP%` 下独立 `--basetemp`、禁用 pytest 缓存）：**755 passed、4 skipped、35 deselected、0 failed**。skip 从 3 变 4：3 项既有 symlink 能力限制 + `test_task_ui_restore.py` 因 **Node.js 已从本机消失**跳过（JavaScript 语法检查本轮同样无法执行）；总数 759 与此前 756+3 一致，为环境漂移非代码变化。另记录一个易错点：`--basetemp` 放在 git 仓库（含工作树）内部时，catalog/git_reader 的两个"非仓库目录"测试会因向上解析到工作树而失败（已用外部 basetemp 复核 2 passed）。Ruff `--no-cache src tests` 通过。主项目 Rich 三份（`snapshots-20260920/analysis/`）与 Rich–Click 四份（`cross-repo-rich-click-20260926-01/`）冻结文件只读 SHA-256 与第 36 节一致。未应用补丁到试点来源或阶段 B 冻结文件，未提交、push、修改远端、读取 `.env` 值或补跑正式槽位。
+
+**剩余边界与下一步授权。** 未覆盖：同卷 `(dev,ino)` 复用的理论窗口；硬链接按"树内文件"处理的设计取舍；workspace 之上组件依赖链核实+身份比较而非逐组件持续验证；POSIX 真实 symlink 路径的执行证据。下一步若要闭环需要：(1) 授权一次无 provider 的 Docker/POSIX 运行以执行 symlink 门控测试与原固定 pytest 验证命令；(2) 决定是否把任务提示词补充"唯一逐字匹配"或将 `task_edit_match_failed` 改为非终止性（设计变更）；(3) 是否动用新的真实试点次数（现有授权额度为零）。主项目的 `MOKIOCLAW_CURRENT_BOTTLENECKS_2026-09-30.md` 未更新，合并本工作树时应同步刷新。
+
+## 20. 2026-09-30 三次授权真实试点：Grep 聚焦（额度用尽）
+
+用户授权三次真实运行并说明命令批准由助手执行；工作台重启至本机 `127.0.0.1:56818`（该端口不是持久入口）。固定配置沿用 §18：来源 `4ca74f95…`、27 文件／179494 字节／0 阻断、清单摘要 `9063265bec…`、五项读写范围、`qwen3.5-flash`、镜像摘要、`network=none`、1 attempt／1200 秒／16 次调用／单次输出 3072、token 上限 80000、原固定验证命令；每次任务均先 API 预览并逐项核对 run-policy（固定 SHA、范围、预算、模型、镜像、无网络）再单次启动，无重复创建。三轮均 `cleanup_confirmed=true`，只读容器列表无 MokioClaw 残留；来源 HEAD、与本地 `origin/master` 0/0、index 及原有未跟踪文档前后不变；未应用补丁到来源、未提交、push、改远端、读 `.env` 值。**三次额度已全部用尽，三个原始修复目标仍无完成修复，所有固定验证均为 `not_run`。**
+
+| 任务 | 终态 | 阶段用量（调用／已报告 token） | 副本内实际工作（只读审阅） |
+| --- | --- | --- | --- |
+| `9BULBLf9dU5IFh_APBMDupGJ` | failed / provider_budget_exhausted | 入口 1／563，规划 2／3985，CodeAgent 8／87888，合计 11／92436 | grep_tool.py 又用了已禁用的 `startswith(root)` 前缀判断；tests 新增 1 个真回归（搜索词与越界内容匹配）；获批的 pytest 两用例命令通过；随后撞 80000 门 |
+| `qAam453za3Tn6sU7sc_7YsmF` | failed / task_tool_failed（`FileEditTool / tool_rejected`） | 入口 1／774，规划 2／4798，CodeAgent 4／42527，合计 7／48099 | 实现换成 `os.scandir`+跳过 symlink，但身份核对用"打开后再 stat 路径"自比，两次都跟随当前路径，竞态窗口未闭合；随后某次编辑匹配失败即终止 |
+| `BbWpkINEt1tHTCJBoa585h-L` | failed / provider_budget_exhausted | 入口 1／871，规划 1／2259，CodeAgent 6／77187，合计 8／80317 | 架构最接近完整边界（scandir、lstat、枚举身份、打开核对、`(0,0)` fail-closed、`skipped_insecure`），但 `grep()` 把枚举身份统一改写为 `(0,0)` 使竞态核对成为死代码；另有 `os.read` 只读前 64KB 的截断；两个新测试（文件链接+目录链接）质量好。写入全部成功，未及运行测试即撞门 |
+
+**跨轮发现（供下一步修复决策）：**
+1. **补丁收集器与缓存产物冲突（新工作流缺陷）**：第 1 轮获批的 pytest 在可写 `/workspace` 挂载内留下 `.pytest_cache`／`__pycache__`，`collect_patch` 的 `_scan` 没有缓存产物忽略规则，遇到第一个范围外新文件即整体 `patch_unavailable(change_outside_write_scope)`——即使 Agent 修复完美补丁也不可用，且失败发生在到达真实改动之前。可选修复方向：收集器忽略 `__pycache__`/`.pytest_cache`/`*.pyc`，或任务命令策略禁写字节码缓存，或两者都做；属设计语义调整，未经批准不实施。
+2. **FileEditTool 匹配失败仍是单点致命步**：第 2 轮在显式警告下仍在第一次编辑失败；第 3 轮按"小文件用 FileWriteTool 整文件写回"策略全部写入成功，证明整文件重写可绕开该失败模式。建议任务说明默认对小文件使用 FileWriteTool，或把 `task_edit_match_failed` 改为非终止性（设计变更）。
+3. **预算与文件编辑任务不匹配**：CodeAgent 每次调用已报告 1.0 万–1.3 万 token（文件内容随上下文重复发送），80000 门只够约 6 次调用，读+写即用尽，第 1、3 轮都没能运行自己的测试或完成收尾。设计上限 100000；若再授权，需明确是否提高 token 门或减少无关读取。
+4. **测试质量逐轮上升但仍不充分**：三轮测试都吸取了"搜索词须命中越界内容"的教训，第 3 轮还断言了 `skipped_insecure`；但没有任何一轮写了竞态注入测试，第 3 轮的"身份清零"死代码缺陷静态测试测不出来。无 provider 开发副本 `grep-boundary-dev-20260930` 中的 10 个边界测试（含身份不匹配与两种真实替换竞态）仍是当前最完整的参照；其 symlink 门控用例仍需 POSIX/Docker 执行。
+
+接续会话应先按 §1 重读设计与本文件；三次额度用尽后任何新真实试点须重新逐项授权（次数、预算、说明），且建议先由用户对上述三项工作流/设计修复做决定。
+
+## 21. 2026-09-30 试点工作流修复实施（无 provider）
+
+用户要求按三次试点的失败内容更新主项目瓶颈文档，并先修复真实运行暴露的错误、下一轮真实运行另行安排。瓶颈文档 `MOKIOCLAW_CURRENT_BOTTLENECKS_2026-09-30.md` 已在主项目重写（三次失败、三项修复、下一步顺序）；主项目除该文档外无改动。随后在阶段 B 工作树以测试驱动完成两项修复，均先红后绿：
+
+1. **补丁收集与运行时噪声**：`task_patch._scan` 将 `__pycache__/`、`.pytest_cache/` 目录与 `*.pyc`／`*.pyo` 文件在 baseline 与 work 两侧对称排除，不再触发 `patch_unavailable(change_outside_write_scope)`，也不进入补丁；其余范围外改动仍整体拒绝。新增 3 个测试：缓存产物不阻断不入选、两侧对称剪除无幻影删除、非缓存的越界改动仍拒绝。`task_executor` 容器创建参数固定注入 `PYTHONDONTWRITEBYTECODE=1`（执行器固定策略层），executor 参数测试改为断言恰好一个 `--env` 且值固定、`MOKIO_TASK_API_KEY` 仍不出现。
+2. **编辑匹配失败改为可重试**：`execute_code_agent_tool` 在任务模式下对 `error == "task_edit_match_failed"` 不再发布 `tool_failure`、不再抛 `ReportedTaskToolFailure`，而是把固定错误作为普通 ToolMessage 返回给模型（公开投影为既有 `tool_result` 的 `failed` 状态）；范围拒绝等其余失败仍终止。新增 2 个单元测试（匹配失败返回模型且无事件、范围拒绝仍终止）和 1 个全图假模型测试（坏编辑→错误回传→好编辑成功→工作流完成、事件中无 `tool_failure` 且含 failed+passed 两种 `tool_result`）。任务 CodeAgent 提示补充"小文件优先 FileWriteTool 整文件重写；old_text 逐字唯一匹配、不带行号前缀"，提示测试同步扩展。
+
+阶段 B 设计以"2026-09-30 Task 10 试点修复补充"段落记录上述两处语义变更与下一轮预算建议（100000，设计上限，由下次授权明确）。实现与测试中的调试记录：全图测试曾三次自伤——假模型在编辑成功后仍循环调用（改为成功即收尾）、测试夹具用 `write_text` 默认把工作文件写成 CRLF 致带换行的 old_text 匹配失败（改用 LF+单行锚点；真实任务副本为 LF 不受影响）、测试断言短语与提示词原文不一致；均为测试侧修正，不涉及产品代码回退。
+
+最终验证（指定 Python、显式 `PYTHONPATH=src`、外部独立 `--basetemp`、禁用 pytest 缓存、`PYTHONDONTWRITEBYTECODE=1`）：全项目非 Docker 回归 **761 passed、4 skipped、35 deselected、0 failed**（755+6 个新测试；4 个 skip 仍为 3 项 symlink 能力 + 1 项 Node.js 缺失的环境漂移）。Ruff `--no-cache src tests` 通过；`git diff --check` 通过；改动文件秘密格式扫描 0 命中；Click 冻结身份校验随全量回归通过（`src/mokioclaw/tools/*.py`、`graph/architectures.py`、`graph/workflow.py` 未改动），主项目 Rich 三份与 Rich–Click 四份冻结文件本轮早前只读核对一致且此后未动。本轮未调用 provider、未启动真实 Agent 或 Docker、未应用补丁到来源、未提交、push 或修改远端。下一轮真实运行待用户单独授权：建议 token 门 100000、任务说明沿用整文件重写策略，并沿用原固定验证命令。
+
+## 22. 2026-10-02 第二批五次授权试点：三项工作流修复落地，Grep 参照实现获独立验证
+
+用户重启工作台至本机 `127.0.0.1:58182`（非持久入口）并授权五次真实运行、命令批准由助手执行。固定配置：来源 `4ca74f95…`、27 文件／179494 字节／0 阻断、清单摘要 `9063265bec…`、五项范围、`qwen3.5-flash`、镜像、`network=none`、1 attempt／1200 秒／16 调用／单次输出 3072、**token 门 100000（设计上限，按 §21 建议）**、原固定验证命令；每次均 API 预览并核对 run-policy 后单次启动。五次全部 `cleanup_confirmed=true`、来源不变；**额度用尽，仍无正式完成的任务，固定验证均为 `not_run`**，但四项工作流修复在本批全部落地并经生产验证，且第 4 轮的 Agent 实现通过独立容器验证。
+
+| 轮次 | 任务 | 终态 | 关键发现 |
+| --- | --- | --- | --- |
+| 1 | `1neWBSzRY11eRwYt95-2LMZR` | failed / provider_budget_exhausted（11 调用／103284 token） | 实现首次把身份锚定在枚举时且未被清零；但显式单文件路径被写死 (0,0) 永远跳过、glob 过滤丢失、跳过路径 fd 泄漏、分块读取破坏行号；独立容器验证其 41 旧测试通过 |
+| 2 | `xk6endMlXYsYXQkHSeZUaPgs` | failed / task_tool_failed（`BashTool / tool_rejected`） | Agent 转录测试代码时把 `\n` 转义写成真实换行，`tests/test_tools.py:121` SyntaxError；pytest 退出码 2 被判终止性失败——**暴露第三类可恢复信号误判**；独立只读容器复现证明执行器本身正常 |
+| 3 | `YIX2wqETSaDLE4UBOTlsBCL9` | failed / **worker_failed** | 模型给 Bash 传非法参数（疑似把任务总时长 1200 当命令超时），`RemoteTaskGateway` 原样转发被父进程消息校验拒绝 → worker 通道中断 |
+| 4 | `gW5tiakGHcbcR0y6JTogbDDN` | failed / provider_budget_exhausted（16 调用／111960 token） | **自愈循环首次工作**：pytest 失败→修复→重跑通过→再验证；但任务说明内嵌验收测试本身有错（"范围外"目录建在了工作区内），Agent 陷入不可修复的迭代直到预算耗尽 |
+| 5 | `wbIVH4Tc43PNYuslg2VtPJQY` | failed / task_tool_failed（`unknown/unknown`） | 模型幻觉出未注册工具名；三处分发点（planner/codeAgent/verifier）都把它当终止性失败，仅消耗 37337 token 即死 |
+
+**本批实施的三项代码修复（均 TDD、先红后绿，§21 的两项修复同时经生产验证）**：(1) `execute_code_agent_tool` 将"命令已实际执行且携带 `exit_code`、无 `error` 字段"的 BashTool 结果改为可重试（公开投影 `tool_result/failed`）；(2) `RemoteTaskGateway.run` 在发送前执行与父进程一致的参数校验，`invalid_task_command` 本地返回且可重试；(3) 三个分发点把 `unknown tool:` 错误作为普通工具结果回传模型。设计补充"2026-10-02 Task 10 试点修复补充（续）"记录全部语义。**第 2 轮实测验证容器级 `PYTHONDONTWRITEBYTECODE=1` 有效**（执行 pytest 后 work 目录无任何字节码缓存）。
+
+**关键结论：Grep 边界修复本体已被 Agent 独立达成。** 第 4 轮的实现（`gW5tiak…/workspace/work/src/mokioclaw/tools/grep_tool.py`，语法完好）在修正验收测试的位置错误后（"范围外"目录移至 `tmp_path.parent`），以固定镜像只读容器运行原固定验证命令得 **42 passed、2 deselected**（41 项旧测试 + 文件/目录符号链接边界测试全部通过）。该实现含 scandir 枚举、lstat 跳过链接（含目录链接）、(0,0) fail-closed、枚举身份 vs fstat 竞态核对、`skipped_insecure` 计数——正是任务目标。其显式路径与 glob 行为、fd 关闭等仍以人工审阅为准（旧套件无对应测试）。第 4 轮失败 purely 因为任务说明内嵌测试的位置错误驱动无限迭代；该测试错误已在交接中更正，后续任务说明应使用修正版。
+
+最终验证：全项目非 Docker 回归（指定 Python、显式 `PYTHONPATH=src`、外部独立 `--basetemp`、禁用缓存）**768 passed、4 skipped、35 deselected、0 failed**（新增 6 项：命令非零退出重试 2、网关本地校验 1、未知工具重试 3）；Ruff `--no-cache src tests`、`git diff --check`、秘密格式扫描通过；Click 冻结身份校验随全量回归通过。未调用 provider（本节记录的试点均为已授权运行）、未应用补丁到来源、未提交、push 或修改远端。**五次额度已全部用尽；下一次试点须重新授权。** 建议下一次：沿用第 4 轮任务说明+修正版测试（现工作树代码含全部四项修复），任务说明不内嵌位置错误的测试；预算仍是约束，可考虑在授权中明确降低迭代需求或接受 100000 上限下的多次尝试。

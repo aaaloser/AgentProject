@@ -723,8 +723,12 @@ def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) 
                 raise TaskExecutionError("task_tool_failed") from None
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if state.get("task_context") is not None and isinstance(result, dict) and result.get("ok") is False:
-        writer(task_tool_failure_event("planner", name, error=result.get("error")))
-        raise TaskExecutionError("task_tool_failed")
+        if str(result.get("error", "")).startswith("unknown tool:"):
+            # Hallucinated tool name: model-visible and retryable, nothing executed.
+            pass
+        else:
+            writer(task_tool_failure_event("planner", name, error=result.get("error")))
+            raise TaskExecutionError("task_tool_failed")
     tool_message = ToolMessage(
         content=json.dumps(result, ensure_ascii=False),
         name=name,
@@ -753,7 +757,8 @@ def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any], *, wri
                 raise TaskExecutionError("task_tool_failed") from None
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if state.get("task_context") is not None and isinstance(result, dict):
-        if result.get("ok") is False and type(result.get("exit_code")) is not int:
+        if (result.get("ok") is False and type(result.get("exit_code")) is not int
+                and not str(result.get("error", "")).startswith("unknown tool:")):
             if writer is not None:
                 writer(task_tool_failure_event("verifier", name, error=result.get("error")))
             raise TaskExecutionError("task_tool_failed")

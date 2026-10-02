@@ -542,3 +542,84 @@ def test_fake_full_graph_retries_only_after_verifier_failure_and_keeps_work(tmp_
         "verifier_calls": 2, "verifier_reported_tokens": 10,
         "context_compressor_calls": 0, "context_compressor_reported_tokens": 0,
     }
+
+
+def test_failed_edit_match_returns_to_model_and_attempt_continues(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    (work / "src" / "a.py").write_text("alpha\nbeta\n", encoding="utf-8", newline="\n")
+    prepared = SimpleNamespace(task_id="task_1234567890123456", work=work,
+                               baseline=tmp_path / "baseline", root=tmp_path)
+    fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
+
+    class RetryEditModel:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            system = str(messages[0].content)
+            if "intent router" in system:
+                content, calls = '{"route":"workflow","reason":"task","confidence":0.99}', []
+            elif "planner/supervisor" in system:
+                if '"ok": true' in str(messages[-1].content):
+                    content, calls = "done", []
+                else:
+                    content, calls = "", [{"name": "CallCodeAgentTool", "id": "handoff",
+                                           "args": {"instruction": "repair"}}]
+            elif "codeAgent" in system:
+                last = str(messages[-1].content)
+                if '"ok": true' in last:
+                    content, calls = "done", []
+                elif "task_edit_match_failed" in last:
+                    content, calls = "", [{"name": "FileEditTool", "id": "good-edit",
+                                           "args": {"file_path": "src/a.py",
+                                                    "old_text": "alpha", "new_text": "gamma"}}]
+                else:
+                    content, calls = "", [{"name": "FileEditTool", "id": "bad-edit",
+                                           "args": {"file_path": "src/a.py",
+                                                    "old_text": "NOT PRESENT ANYWHERE", "new_text": "x"}}]
+            else:
+                content, calls = '{"passed": true, "reason": "ok", "checks": []}', []
+            return AIMessage(content=content, tool_calls=calls, usage_metadata={
+                "input_tokens": 3, "output_tokens": 2, "total_tokens": 5,
+            })
+
+    ctx = TaskRunContext.for_fake_model(
+        RetryEditModel(), max_provider_calls=20, max_total_tokens=500,
+        max_output_tokens_per_call=20,
+    )
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    projected = []
+    run_projected_workflow("repair", work, ctx, projected.append, max_attempts=1)
+    assert (work / "src" / "a.py").read_text(encoding="utf-8") == "gamma\nbeta\n"
+    assert [event for event in projected if event["kind"] == "tool_failure"] == []
+    statuses = [event["status"] for event in projected if event["kind"] == "tool_result"]
+    assert "failed" in statuses and "passed" in statuses
+
+
+def test_task_verifier_unknown_tool_returns_error_without_terminating(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    prepared = SimpleNamespace(task_id="task_1234567890123456", work=work,
+                               baseline=tmp_path / "baseline", root=tmp_path)
+    fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
+    runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off")
+    ctx = context(FakeModel("unused"))
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    state = {"runtime": runtime, "task": "repair", "task_context": ctx}
+    emitted = []
+    message = nodes._execute_read_only_tool(
+        state, {"name": "FakeTool", "id": "f2", "args": {}}, writer=emitted.append)
+    assert "unknown tool: FakeTool" in str(message.content)
+    assert emitted == []
+
+
+def test_task_planner_unknown_tool_returns_error_without_terminating() -> None:
+    ctx = context(FakeModel("unused"))
+    state = {"task": "repair", "task_context": ctx,
+             "runtime": SimpleNamespace(task_filesystem=object(), allow_web_search=False)}
+    emitted = []
+    message = nodes._execute_planner_tool(
+        state, emitted.append, {"name": "FakeTool", "id": "f1", "args": {}})
+    assert "unknown tool: FakeTool" in str(message.content)
+    assert [event for event in emitted if event.get("type") == "task_tool_failure"] == []
