@@ -2147,3 +2147,9 @@ Task 9 验收后审阅发现启动桥虽存在，CLI 尚不能显式启用真实
 ## 62. 2026-10-03 Task 10 预算上限调整（TDD，无 provider）
 
 用户就停止条件选择选项 A（上调上限），并批准第 3 次运行预算 token 150000／调用 20。新增 API 测试 `test_provider_budget_ceilings_match_amended_design_maxima`（先红）后，将 `task_service` 创建校验的 `max_total_tokens` 上限 100000→200000、`max_provider_calls` 上限 20→24；设计 §5 增补"2026-10-03 Task 10 预算上限调整"段落（上限是门不是默认值，每次真实试点仍逐项明示授权；预算机制与单次输出上限不变）。最终全项目非 Docker 回归（指定 Python、显式 `PYTHONPATH=src`、外部独立 `--basetemp`、禁用缓存）**769 passed、4 skipped、35 deselected、0 failed**（+1 新测试；4 个 skip 仍为 3 项 symlink 能力 + 1 项 Node.js 缺失）；Ruff `--no-cache src tests`、`git diff --check`、改动文件秘密格式扫描（0 命中）通过；Click 冻结身份校验随全量回归通过。任务说明 `-c` 版本仅改 `-b` 的预算两字段。全程未调用 provider、未启动真实 Agent 或 Docker、未应用补丁到来源、未 push 或修改远端。
+
+---
+
+## 63. 2026-10-03 Task 10 第三批第 3、4 次试点：provider_failed 连续两次（零调用），暂停待 provider 排查
+
+工作台重启至 `127.0.0.1:53113`，run-policy 实证新上限生效（token 150000／调用 20）。第 3 次 `Xo6Wm6BjzgP1gcKTiJVbfcuI` 与第 4 次（用户批准的立即重试）`gXB-jvkwzPgyAl4AL8rRYOzj` 签名完全相同：running 后约 160ms–3s 即 stopping，终态 **failed／provider_failed**，无任何 stage／tool_result／budget_usage 事件、零 provider 调用、零源码改动、清理确认。前一日同配置可完成 13–16 次调用，判定为 provider 侧持续性异常（计费/配额/凭证/服务端，类别映射之外），非瞬态、非预算、非本仓代码；设计上不记录异常文本，边界内无法进一步定位。剩余 1 次授权保留待 provider 排查后使用；两轮固定门／run-policy 均逐项核对，来源仓库不变，未 push、未动冻结文件。
