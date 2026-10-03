@@ -65,6 +65,8 @@
 
 可写 work 在执行期另设**软边界**：最多 5,000 个普通文件、总普通文件字节数 128 MiB、单文件 8 MiB。可信控制器在每次命令前后及执行中的有界周期扫描 work；超限即停止该命令／任务并走资源清理，记录 `workspace_limit_exceeded`。补丁收集遇到超限、symlink 或不可安全读取文件时返回 `patch_unavailable`，不读取／展示半截补丁。Docker 的 CPU／内存／PID 限制不限制宿主 bind mount 磁盘占用；周期监测不能阻止两次采样之间的瞬时增长，因此它不是文件系统硬配额，真实试点须在启动前确认 task-root 所在卷有足够空间或另有卷配额。
 
+2026-10-03 Task 10 预算上限调整：第三批前两次授权试点（交接 §23）证明 100000 已报告 token 门使 Agent 固定验证从未获得执行机会——三次运行（含第二批第 4 轮）全部在 `verifier_calls=0` 时撞门。经用户批准，任务级 provider 预算的取值上限上调为**24 次请求、累计 200,000 个已报告 token**（`task_service` 创建校验同步），上限是门不是默认值：每次真实试点仍须对请求次数与 token 上限逐项明示授权。预算机制本身不变：下一次调用前检查已知用量、达到阈值即停止、缺失用量仍为 `usage_unavailable`、最后一次调用可越过阈值；单次输出 token 上限（4,096）不变。
+
 ## 6. 执行、审批与 provider 边界
 
 真实工作流由独立本机 worker 进程承载，使用单独任务目录和经过筛选的环境；不能继承 shell 的全量环境或从 `.env` 自动装载配置。启动者须显式提供 `--task-image`（固定镜像 digest）和 `--enable-agent`，两者缺任一项时真实运行能力关闭；它们仍不能替代页面中针对具体任务的运行确认或用户对真实试点的另行授权。任务 provider 配置仅从启动者显式设置的 `MOKIO_TASK_API_KEY`、`MOKIO_TASK_MODEL`、`MOKIO_TASK_BASE_URL` 三个进程环境变量取得，不回退到旧 `API_KEY` 等环境变量或项目 `.env`。旧 CLI/TUI 仍可沿用旧入口，但任务 worker 必须显式注入这组 provider 设置，并使所有 graph 节点和 CodeAgent 的 `create_model()` 调用使用该设置。provider 凭据只留在可信服务／worker 的内存和受限子进程环境，不进入浏览器、任务 JSON、日志、trace、命令容器或补丁。网页任务禁用 web search，默认关闭原始 trace/checkpoint；只由任务投影器保存白名单摘要。任务开始前展示模型标识、可传输范围及请求数／token 上限；实际费用依 provider 计费而变，界面不把 token 上限称为固定金额。缺配置或预算不足时不调用 provider。服务与 worker 不输出这些环境变量的值。

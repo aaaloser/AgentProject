@@ -2133,3 +2133,17 @@ Task 9 验收后审阅发现启动桥虽存在，CLI 尚不能显式启用真实
 针对第 2、3、5 轮暴露的缺陷完成三项 TDD 修复：(1) BashTool 已执行命令（含 `exit_code`、无 `error`）的非零退出改为可重试工具结果；(2) `RemoteTaskGateway.run` 发送前本地校验参数（镜像父进程网关规则），`invalid_task_command` 本地返回且可重试；(3) 三个分发点的 `unknown tool:` 错误改为回传模型。设计增补"2026-10-02 试点修复补充（续）"。第 2 轮同时实测容器级 `PYTHONDONTWRITEBYTECODE=1` 有效（work 无字节码缓存）。第 4 轮失败根因是任务说明内嵌测试自身位置错误（非实现缺陷）——把"范围外"目录修正到 `tmp_path.parent` 后，该轮 Agent 实现以固定镜像只读容器运行原固定验证命令得 **42 passed、2 deselected**，即 Grep 符号链接边界修复本体已被 Agent 独立达成（scandir、lstat 跳链接、(0,0) fail-closed、枚举身份竞态核对、skipped_insecure 计数）。
 
 最终全项目非 Docker 回归 **768 passed、4 skipped、35 deselected、0 failed**（+6 新测试）；Ruff、`git diff --check`、秘密扫描通过；Click 冻结身份校验随回归通过。五次额度用尽，下一次试点须重新授权；建议使用第 4 轮说明+修正版测试，并正视 100000 token 上限与迭代成本的矛盾。
+
+---
+
+## 61. 2026-10-02 Task 10 第三批前两轮试点：实现通过独立验证，预算门连续两次阻断 verifier
+
+四项修复提交为 `12c91ba` 后，用户授权五次真实运行（工作台 `127.0.0.1:54199`）。第 1 轮用原任务说明 `pbiVtYo1hOaxbLKfXKkifrke`，16 调用／103963 token（codeAgent 13／96678，verifier 0）failed／provider_budget_exhausted：实现有致命缺陷（`entry.path.parts` AttributeError、递归死代码、fd 泄漏、编码阶梯双重 close），固定镜像只读容器复现原固定命令 2 failed／40 passed／2 deselected；其模型命令（无 -k）另暴露两个环境性失败，经用户批准对任务说明做最小修订（仅步骤四加与固定验证命令相同的 -k 排除，`next-run-task-description-2026-10-02-b.json`）。第 2 轮 `Wqh3VPa65W1bumdIabUQL6bx` 用修订版说明，15 调用／102516 token（codeAgent 12／95065，verifier 0）failed／provider_budget_exhausted：自愈循环完整工作一轮（pytest→修复→重跑），实现以固定镜像只读容器运行原固定验证命令 **42 passed／2 deselected**（与第 4 轮参照同级）；静态审阅发现 fdopen 作用于已关闭 fd（验证过的 fd 读取从未发生）与编码阶梯退化两处次要缺陷。两轮均固定门全核对、命令逐条批准、清理确认、来源不变。
+
+结构性结论：三次带修正说明或全修复的运行（第二批第 4 轮与本批两次）全部在 verifier_calls=0 时撞 100000 token 门；正式完成约需 18–21 调用／120–150k token，16 调用门亦接近绑定。按停止条件暂停，剩余 3 次授权未消耗，预算上限调整（`task_service._integer` 与设计 §5）待用户决策。本轮独立容器验证为助手独立验证，Agent 固定验证两次均为 not_run；未提交新代码、未 push、未动冻结文件。
+
+---
+
+## 62. 2026-10-03 Task 10 预算上限调整（TDD，无 provider）
+
+用户就停止条件选择选项 A（上调上限），并批准第 3 次运行预算 token 150000／调用 20。新增 API 测试 `test_provider_budget_ceilings_match_amended_design_maxima`（先红）后，将 `task_service` 创建校验的 `max_total_tokens` 上限 100000→200000、`max_provider_calls` 上限 20→24；设计 §5 增补"2026-10-03 Task 10 预算上限调整"段落（上限是门不是默认值，每次真实试点仍逐项明示授权；预算机制与单次输出上限不变）。最终全项目非 Docker 回归（指定 Python、显式 `PYTHONPATH=src`、外部独立 `--basetemp`、禁用缓存）**769 passed、4 skipped、35 deselected、0 failed**（+1 新测试；4 个 skip 仍为 3 项 symlink 能力 + 1 项 Node.js 缺失）；Ruff `--no-cache src tests`、`git diff --check`、改动文件秘密格式扫描（0 命中）通过；Click 冻结身份校验随全量回归通过。任务说明 `-c` 版本仅改 `-b` 的预算两字段。全程未调用 provider、未启动真实 Agent 或 Docker、未应用补丁到来源、未 push 或修改远端。

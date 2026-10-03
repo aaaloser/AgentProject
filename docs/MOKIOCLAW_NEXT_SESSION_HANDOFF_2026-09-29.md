@@ -222,3 +222,16 @@
 **关键结论：Grep 边界修复本体已被 Agent 独立达成。** 第 4 轮的实现（`gW5tiak…/workspace/work/src/mokioclaw/tools/grep_tool.py`，语法完好）在修正验收测试的位置错误后（"范围外"目录移至 `tmp_path.parent`），以固定镜像只读容器运行原固定验证命令得 **42 passed、2 deselected**（41 项旧测试 + 文件/目录符号链接边界测试全部通过）。该实现含 scandir 枚举、lstat 跳过链接（含目录链接）、(0,0) fail-closed、枚举身份 vs fstat 竞态核对、`skipped_insecure` 计数——正是任务目标。其显式路径与 glob 行为、fd 关闭等仍以人工审阅为准（旧套件无对应测试）。第 4 轮失败 purely 因为任务说明内嵌测试的位置错误驱动无限迭代；该测试错误已在交接中更正，后续任务说明应使用修正版。
 
 最终验证：全项目非 Docker 回归（指定 Python、显式 `PYTHONPATH=src`、外部独立 `--basetemp`、禁用缓存）**768 passed、4 skipped、35 deselected、0 failed**（新增 6 项：命令非零退出重试 2、网关本地校验 1、未知工具重试 3）；Ruff `--no-cache src tests`、`git diff --check`、秘密格式扫描通过；Click 冻结身份校验随全量回归通过。未调用 provider（本节记录的试点均为已授权运行）、未应用补丁到来源、未提交、push 或修改远端。**五次额度已全部用尽；下一次试点须重新授权。** 建议下一次：沿用第 4 轮任务说明+修正版测试（现工作树代码含全部四项修复），任务说明不内嵌位置错误的测试；预算仍是约束，可考虑在授权中明确降低迭代需求或接受 100000 上限下的多次尝试。
+
+## 23. 2026-10-02 第三批授权试点前两轮：实现本体首次通过独立验证，预算门连续两次阻断 verifier
+
+用户确认提交（`12c91ba`，四项修复+测试+文档）后授权五次真实运行，工作台 `127.0.0.1:54199`。第 1 轮使用原任务说明；第 2 轮经用户批准最小修订（选项 B）：仅把任务说明步骤四的模型命令加上固定验证命令已有的 `-k 'not test_bash_prefers_runtime_python_on_path and not test_bash_env_file_expands_existing_variables'` 排除（新文件 `next-run-task-description-2026-10-02-b.json`；修正版验收测试与固定验证命令原样保留，仅 `description` 一个键变化）。两轮均先 API 预览核对固定门（27 文件／179494 字节／0 阻断／清单摘要 `9063265bec…`）与 run-policy 全项后单次启动；每条命令按内容、cwd、镜像摘要、network=none 核对后在窗口内批准（脚本 `task10-run{1,2}-{create,monitor}.py` 存于私有任务根）。两轮均经 `stopping` 清理后发布终态、无容器残留，来源仓库 HEAD、0/0 关系与未跟踪文档前后不变。
+
+| 轮次 | 任务 | 终态 | 阶段用量（调用／已报告 token） | 独立验证与审阅（助手独立执行，非 Agent 固定验证） |
+| --- | --- | --- | --- | --- |
+| 1 | `pbiVtYo1hOaxbLKfXKkifrke` | failed / provider_budget_exhausted | entry 1／1152，planner 2／6133，codeAgent 13／96678，verifier 0；合计 16／103963 | 补丁可用（+112/−20）但实现有致命缺陷：`entry.path.parts`（str 无 `.parts`）AttributeError、目录递归为死代码、fstat 不匹配路径 fd 泄漏、编码阶梯双重 close；固定镜像只读容器复现原固定命令 **2 failed／40 passed／2 deselected**；模型自身命令（无 -k）4 failed，含两个环境性失败 |
+| 2 | `Wqh3VPa65W1bumdIabUQL6bx` | failed / provider_budget_exhausted | entry 1／1141，planner 2／6310，codeAgent 12／95065，verifier 0；合计 15／102516 | 补丁可用（+117/−20）；固定镜像只读容器运行原固定验证命令 **42 passed／2 deselected**（与第 4 轮参照同级）；静态审阅：fdopen 作用于已关闭 fd，验证过的 fd 读取从未发生（恒回退按路径重读，重开窗口未核实），编码阶梯因首层 errors=replace 退化为恒 utf-8+replace |
+
+**结构性结论：预算门已是唯一约束。** 本批两轮是首批在全部四项修复下运行的试点，自愈循环完整工作（第 2 轮：首次 pytest→修复→重跑）；但连同第二批第 4 轮，三次运行全部在 `verifier_calls=0` 时撞 100000 已报告 token 门，Agent 固定验证从未获得执行机会。单次调用均值约 7.4–8.3k token；完成一次正式流程约需 18–21 次调用、120–150k token（entry/planner 约 7.5k + codeAgent 12–15 次 + verifier 2–3 次），16 次调用门同样接近绑定（第 2 轮用满 15）。第 2 轮证明模型可在预算内产出通过固定验证的实现——约束在门，不在模型质量。**连续两次未正式完成，按停止条件暂停：剩余 3 次授权未消耗，预算设计调整（上调 `task_service._integer` 校验上限与设计 §5、维持原样继续抽样、或拆分任务）待用户决策；决策前不启动新任务。**
+
+**2026-10-03 决策与实施：**用户选择上调上限（选项 A），并已批准第 3 次运行预算 token 150000／调用 20。TDD 先红后绿：新增 `test_provider_budget_ceilings_match_amended_design_maxima`（150000/22 与 200000/24 接受，越界 400），`task_service` 创建校验上限改为 token 200000／调用 24；全项目非 Docker 回归 **769 passed、4 skipped、35 deselected、0 failed**（含 Click 冻结身份校验），Ruff `--no-cache src tests`、`git diff --check`、改动文件秘密扫描通过。设计 §5 增补"2026-10-03 Task 10 预算上限调整"段落。任务说明 `-c` 版本仅将 `-b` 的预算两字段改为 150000/20。工作台需再次重启以加载新上限后继续剩余三次运行。

@@ -283,6 +283,22 @@ def test_preview_mismatch_and_prepare_failure_are_safe(task_api, monkeypatch) ->
     assert client.post(f"/api/tasks/{task_id}/run", headers=headers, json={}).status_code != 200
 
 
+def test_provider_budget_ceilings_match_amended_design_maxima(task_api) -> None:
+    client, headers, service, _, _, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    base = _task_payload(preview, repo_id, sha)
+    accepted = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "budget-mid"}, json={
+        **base, "max_provider_calls": 22, "max_total_tokens": 150_000})
+    assert accepted.status_code == 202
+    ceiling = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "budget-max"}, json={
+        **base, "max_provider_calls": 24, "max_total_tokens": 200_000})
+    assert ceiling.status_code == 202
+    assert client.post("/api/tasks", headers={**headers, "Idempotency-Key": "budget-calls-over"}, json={
+        **base, "max_provider_calls": 25}).status_code == 400
+    assert client.post("/api/tasks", headers={**headers, "Idempotency-Key": "budget-tokens-over"}, json={
+        **base, "max_total_tokens": 200_001}).status_code == 400
+
+
 def test_run_gate_and_busy_state(task_api) -> None:
     client, headers, service, _, _, repo_id, sha = task_api
     preview = _preview(client, headers, repo_id, sha).json()

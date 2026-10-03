@@ -351,8 +351,8 @@ class TaskService:
             source_write_scope=preview.source_write_scope, task_scratch_scope=preview.task_scratch_scope,
             manifest_digest=preview.manifest_digest, max_seconds=_integer(payload, "max_seconds", 1, 1800),
             max_attempts=_integer(payload, "max_attempts", 1, 3), verification_commands=tuple(commands),
-            max_provider_calls=_integer(payload, "max_provider_calls", 1, 20),
-            max_total_tokens=_integer(payload, "max_total_tokens", 1, 100_000),
+            max_provider_calls=_integer(payload, "max_provider_calls", 1, 24),
+            max_total_tokens=_integer(payload, "max_total_tokens", 1, 200_000),
             max_output_tokens_per_call=_integer(payload, "max_output_tokens_per_call", 1, 4096), created_at="",
         )
         with self._lock:
