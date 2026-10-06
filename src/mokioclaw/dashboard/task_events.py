@@ -26,7 +26,7 @@ _VALUES = {
         "tool": frozenset({
             "TodoWriteTool", "CallCodeAgentTool", "CallSearchAgentTool", "TodoUpdateTool",
             "BashTool", "FileReadTool", "FileWriteTool", "FileEditTool", "GrepTool",
-            "NotepadReadTool", "NotepadAppendTool", "unknown",
+            "NotepadReadTool", "NotepadAppendTool", "ToolResultReadTool", "unknown",
         }),
         "category": frozenset({
             "invalid_arguments", "scope_denied", "approval_denied_or_expired",
@@ -166,13 +166,13 @@ def project_task_event(raw: dict, task_id: str, attempt_id: int | None, sequence
         for stage in _BUDGET_STAGES:
             calls_key, tokens_key = f"{stage}_calls", f"{stage}_reported_tokens"
             calls, tokens = raw.get(calls_key), raw.get(tokens_key)
-            if (type(calls) is not int or not 0 <= calls <= 20
+            if (type(calls) is not int or not 0 <= calls <= 24
                     or type(tokens) is not int or not 0 <= tokens <= 1_000_000_000_000
                     or (calls == 0 and tokens != 0)):
                 raise TaskEventRejected("Invalid budget usage")
             data[calls_key], data[tokens_key] = calls, tokens
             call_count += calls
-        if call_count > 20:
+        if call_count > 24:
             raise TaskEventRejected("Invalid budget usage")
     if kind == "verification":
         request_id = raw.get("request_id")

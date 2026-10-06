@@ -296,7 +296,31 @@ def test_provider_budget_ceilings_match_amended_design_maxima(task_api) -> None:
     assert client.post("/api/tasks", headers={**headers, "Idempotency-Key": "budget-calls-over"}, json={
         **base, "max_provider_calls": 25}).status_code == 400
     assert client.post("/api/tasks", headers={**headers, "Idempotency-Key": "budget-tokens-over"}, json={
-        **base, "max_total_tokens": 200_001}).status_code == 400
+        **base, "max_total_tokens": 300_001}).status_code == 400
+
+
+@pytest.mark.parametrize("max_tokens", [200_001, 250_000, 300_000])
+def test_expanded_token_budget_is_accepted_and_persisted(task_api, max_tokens: int) -> None:
+    client, headers, service, _, _, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    result = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "expanded-budget"}, json={
+        **_task_payload(preview, repo_id, sha), "max_provider_calls": 24, "max_total_tokens": max_tokens,
+    })
+    assert result.status_code == 202
+    spec = service.store.get_spec(result.json()["task_id"])
+    assert spec.max_total_tokens == max_tokens
+    assert spec.max_provider_calls == 24
+    assert spec.max_output_tokens_per_call == 100
+
+
+@pytest.mark.parametrize("max_tokens", [0, 300_001, True, 300_000.5, "300000"])
+def test_invalid_expanded_token_budget_is_rejected(task_api, max_tokens) -> None:
+    client, headers, _, _, _, repo_id, sha = task_api
+    preview = _preview(client, headers, repo_id, sha).json()
+    result = client.post("/api/tasks", headers={**headers, "Idempotency-Key": "invalid-budget"}, json={
+        **_task_payload(preview, repo_id, sha), "max_total_tokens": max_tokens,
+    })
+    assert result.status_code == 400
 
 
 def test_run_gate_and_busy_state(task_api) -> None:

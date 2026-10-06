@@ -21,8 +21,21 @@ from mokioclaw.providers.openai_provider import ProviderSettings
 def launch_dashboard(
     paths: Sequence[Path], *, open_browser: bool = True, task_root: Path | None = None,
     task_image: str | None = None, enable_agent: bool = False,
+    calibration_root: Path | None = None,
+    calibration_continue_task: str | None = None,
+    calibration_expected_spec_sha256: str | None = None,
+    calibration_expected_source_root: Path | None = None,
 ) -> None:
     """Serve explicitly registered local repositories and optional task capability."""
+    from mokioclaw.dashboard.task_observation_continuation import parse_continuation_options
+    continuation = parse_continuation_options(
+        task_id=calibration_continue_task, expected_spec_sha256=calibration_expected_spec_sha256,
+        expected_source_root=calibration_expected_source_root, calibration_root=calibration_root,
+        task_root=task_root, enable_agent=enable_agent, task_image=task_image, repo_paths=paths,
+    )
+    if calibration_root is not None:
+        from mokioclaw.dashboard.task_diagnostic_viewer import validate_calibration
+        validate_calibration(calibration_root, task_root, enable_agent=enable_agent)
     if enable_agent and (task_root is None or task_image is None
                          or re.fullmatch(r"sha256:[0-9a-f]{64}", task_image) is None):
         raise ValueError("Agent mode needs a task root and fixed local image digest")
@@ -32,11 +45,26 @@ def launch_dashboard(
     catalog = RepositoryCatalog.from_paths(paths, reader)
     task_service = TaskService(
         catalog, reader, task_root, fake_runner=None if enable_agent else FakeTaskRunner(),
+        **({"continuation_options": continuation, "calibration_root": calibration_root} if continuation is not None else {}),
     ) if task_root is not None else None
     try:
+        if calibration_root is not None:
+            from mokioclaw.dashboard.task_diagnostic_viewer import launch_viewer
+            assert task_service is not None
+            manager = task_service.configure_calibration(calibration_root)
+            manager.start_servers()
+            manager._viewer_launch = launch_viewer(manager.viewer_bootstrap)
+            deadline = time.monotonic() + 3
+            while not manager.viewer_ready:
+                if (not manager.valid or manager._viewer_launch.process.poll() is not None
+                        or time.monotonic() >= deadline):
+                    raise ValueError("calibration_observation_invalid")
+                time.sleep(0.01)
         if enable_agent:
             assert task_service is not None and task_image is not None
             task_service.configure_agent(ProviderSettings.from_environment(), task_image)
+        if continuation is not None:
+            catalog = task_service.catalog
         app = create_dashboard_app(catalog, reader, CursorCodec(), task_service=task_service)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

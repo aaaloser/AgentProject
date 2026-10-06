@@ -49,12 +49,20 @@ def _timestamp() -> str:
 
 
 class TaskStore:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, verified_records: tuple[TaskRecord, ...] | None = None):
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._records: dict[str, TaskRecord] = {}
         self._keys: dict[str, tuple[str, str]] = {}
+        if verified_records is not None:
+            for record in verified_records:
+                if (type(record) is not TaskRecord or record.task_id in self._records
+                        or record.idempotency_digest in self._keys):
+                    raise TaskConflict("Invalid task record identity")
+                self._records[record.task_id] = record
+                self._keys[record.idempotency_digest] = (record.request_digest, record.task_id)
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
         for path in self.root.glob("*/record.json"):
             raw = json.loads(path.read_text(encoding="utf-8"))
             raw["events"] = tuple(PublicTaskEvent(**event) for event in raw.get("events", ()))

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from mokioclaw.dashboard.task_context import TaskContextError, recovery_for
+from mokioclaw.core.task_closeout import TaskCloseoutError, CloseoutMode, CloseoutPurpose
 import os
 import re
 from typing import Any
@@ -39,7 +41,7 @@ from mokioclaw.tools.todo_tool import write_todos
 DEFAULT_CONTEXT_TOKEN_LIMIT = 400000
 
 
-def _model_for(state: MokioGraphState, *, stage: str | None = None):
+def _model_for(state: MokioGraphState, *, stage: str | None = None, purpose=None):
     context = state.get("task_context")
     if context is not None:
         runtime = state.get("runtime")
@@ -47,7 +49,7 @@ def _model_for(state: MokioGraphState, *, stage: str | None = None):
             raise ValueError("task_filesystem_mismatch")
         if stage is None:
             raise ValueError("task_model_stage_required")
-        return context.model(stage=stage)
+        return context.model(stage=stage, purpose=purpose)
     runtime = state.get("runtime")
     if runtime is not None and runtime.task_filesystem is not None:
         raise ValueError("task_model_required")
@@ -204,6 +206,10 @@ def planner_node(state: MokioGraphState) -> dict[str, Any]:
         attempts = working_state.get("attempts", 0)
         if attempts and working_state.get("verifier_explicit_failure") is not True:
             raise TaskExecutionError("task_attempt_invalid")
+        if attempts:
+            if attempts >= working_state.get("max_attempts", 3):
+                raise TaskExecutionError("task_attempt_invalid")
+            _admit_task_retry(context)
         context.begin_attempt(attempts + 1)
     if not working_state.get("todos"):
         _apply_plan(working_state, _default_plan(working_state["task"]))
@@ -236,23 +242,59 @@ def planner_node(state: MokioGraphState) -> dict[str, Any]:
         }
     )
 
-    for _ in range(8):
+    final_reply = False
+    for iteration in range(8):
+        closing_before = False
+        if context is not None:
+            with context._lock:
+                context.check_known_failure()
+                context.preflight_provider_budget()
+                if context.closeout.mode == CloseoutMode.REPAIR and (
+                        iteration >= 6 or context.max_provider_calls - context.provider_calls <= context.closeout.remaining_calls):
+                    context.closeout.enter_closing()
+                    if not context.closeout.delegation_admitted:
+                        context.closeout.complete_phase(CloseoutPurpose.HANDOFF)
+                closing_before = context.closeout.mode == CloseoutMode.CLOSING
+            if closing_before:
+                planner = model.for_purpose(CloseoutPurpose.PLANNER).bind_tools(
+                    _task_planner_tools(working_state, writer, final_reply=final_reply))
         response = planner.invoke(messages)
+        planner_call_no = context.provider_calls if context is not None else 0
+        if context is not None:
+            context.check_known_failure()
         produced_messages.append(response)
         messages.append(response)
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
+            if context is not None:
+                with context._lock:
+                    context.closeout.enter_closing()
+                    context.closeout.complete_phase(CloseoutPurpose.PLANNER)
+                    if not context.closeout.delegation_admitted:
+                        context.closeout.complete_phase(CloseoutPurpose.HANDOFF)
             break
+        if context is not None and closing_before and final_reply:
+            raise TaskCloseoutError("phase_limit")
         for call in tool_calls:
             tool_message = _execute_planner_tool(working_state, writer, call)
             produced_messages.append(tool_message)
             messages.append(tool_message)
+        if context is not None and context.closeout.mode == CloseoutMode.CLOSING:
+            if not closing_before:
+                with context._lock:
+                    context.closeout.adopt_planner_response(planner_call_no, response.usage_metadata["total_tokens"])
+            final_reply = True
     else:
+        if context is not None:
+            raise TaskCloseoutError("phase_limit")
         produced_messages.append(AIMessage(content="planner stopped after the maximum supervisor tool loop count."))
 
     metadata = dict(working_state.get("metadata", {}))
     metadata["planner_raw"] = _last_ai_content(produced_messages)
     final_memory = build_layered_memory(working_state, node="planner")
+    if context is not None:
+        with context._lock:
+            context.closeout.note_node_return("planner")
     return {
         "plan_summary": working_state.get("plan_summary", ""),
         "todos": working_state.get("todos", []),
@@ -285,14 +327,22 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
         }
     )
 
-    model = _model_for(state, stage="verifier")
-    verifier = model.bind_tools(_tools_for(state, read_only=True))
-    tool_events: list[dict[str, Any]] = []
     context = state.get("task_context")
+    if context is not None:
+        with context._lock:
+            context.check_known_failure()
+            if context.closeout.mode == CloseoutMode.INACTIVE:
+                context.begin_attempt(context.current_attempt)
+            context.closeout.enter_closing()
+    model = _model_for(state, stage="verifier", purpose=CloseoutPurpose.VERIFIER if context is not None else None)
+    verifier = model.bind_tools(_task_verifier_tools(state, final_reply=False) if context is not None
+                                else _tools_for(state, read_only=True))
+    tool_events: list[dict[str, Any]] = []
     if context is not None:
         for command_index, command in enumerate(context.fixed_verification_commands):
             result = run_task_verification(context.task_gateway, state["runtime"].workspace, command)
             if type(result.get("exit_code")) is not int:
+                context.record_terminal_root("verification_command_failed")
                 raise TaskExecutionError("verification_command_failed")
             actual = {**result, "command": command, "command_index": command_index}
             event = {"type": "tool_result", "node": "verifier", "name": "BashTool", "result": actual}
@@ -308,13 +358,25 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
         )))
     produced_messages: list[Any] = []
 
-    for _ in range(8):
+    for iteration in range(2 if context is not None else 8):
+        if context is not None and iteration:
+            verifier = model.bind_tools([])
         response = verifier.invoke(messages)
+        if context is not None:
+            context.check_known_failure()
         produced_messages.append(response)
         messages.append(response)
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
             break
+        if context is not None:
+            if iteration:
+                raise TaskCloseoutError("phase_limit")
+            try:
+                _validate_closeout_verifier_group(tool_calls, _task_verifier_tools(state, final_reply=False))
+            except TaskExecutionError:
+                context.record_terminal_root("task_tool_failed")
+                raise
         for call in tool_calls:
             writer({"type": "tool_call", "node": "verifier", "name": call.get("name"), "args": call.get("args", {})})
             tool_message = _execute_read_only_tool(state, call, writer=writer)
@@ -324,6 +386,8 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
             produced_messages.append(tool_message)
             messages.append(tool_message)
     else:
+        if context is not None:
+            raise TaskCloseoutError("phase_limit")
         produced_messages.append(
             AIMessage(
                 content=json.dumps(
@@ -389,6 +453,10 @@ def verifier_node(state: MokioGraphState) -> dict[str, Any]:
             }
         )
     last_error = "" if passed else _format_verifier_error(reason, recommended, tool_events)
+    if context is not None:
+        with context._lock:
+            context.closeout.complete_phase(CloseoutPurpose.VERIFIER)
+            context.closeout.note_node_return("verifier")
 
     return {
         "messages": produced_messages,
@@ -416,6 +484,10 @@ def context_monitor_node(state: MokioGraphState) -> dict[str, Any]:
     token_limit = get_context_token_limit(state)
     token_count = estimate_context_tokens(state)
     should_compress = token_count >= token_limit
+    context = state.get("task_context")
+    if context is not None and context.closeout.mode == CloseoutMode.CLOSING and not should_compress:
+        with context._lock:
+            context.closeout.complete_phase(_task_compression_purpose(state))
     next_node = state.get("context_next_node") or "verifier"
     event = {
         "type": "context_monitor",
@@ -476,6 +548,11 @@ def context_compressor_node(state: MokioGraphState) -> dict[str, Any]:
     }
     events = list(state.get("compression_events", [])) + [compression_event]
     writer({"type": "context_compression", **compression_event})
+    if state.get("task_context") is not None:
+        context = state["task_context"]
+        with context._lock:
+            context.check_known_failure()
+            context.closeout.complete_phase(_task_compression_purpose(state))
     return {
         "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), summary_message],
         "context_summary": summary,
@@ -681,6 +758,17 @@ def _call_code_agent_tool(state: MokioGraphState, writer, instruction: str) -> d
     if context is None:
         result = run_code_agent(state, instruction, writer=writer)
     else:
+        with context._lock:
+            context.check_known_failure()
+            context.preflight_provider_budget()
+            if context.closeout.mode == CloseoutMode.INACTIVE:
+                context.begin_attempt(context.current_attempt)
+            if not context.closeout.admit_delegation(
+                    calls_left=context.max_provider_calls - context.provider_calls,
+                    tokens_left=context.max_total_tokens - context.reported_tokens):
+                if state.get("code_agent_summary"):
+                    return {"ok": False, "error": "closeout_requested"}
+                raise TaskCloseoutError("budget_slots_insufficient")
         result = run_code_agent(
             state, instruction, writer=writer,
             tools_override=_tools_for(state, read_only=False), model_override=context.model(stage="code_agent"),
@@ -699,6 +787,18 @@ def _call_code_agent_tool(state: MokioGraphState, writer, instruction: str) -> d
     return {"ok": True, "summary": result.get("summary", ""), "todos": state.get("todos", [])}
 
 
+def _task_planner_tools(state, writer, *, final_reply):
+    return [] if final_reply else [t for t in _build_planner_tools(state, writer) if t.name == "TodoWriteTool"]
+
+
+def _closeout_delegation_result(context, call):
+    if (context.closeout.mode == CloseoutMode.CLOSING and call.get("name") == "CallCodeAgentTool"
+            and isinstance(call.get("args"), dict) and isinstance(call["args"].get("instruction"), str)):
+        context.check_known_failure()
+        return {"ok": False, "error": "closeout_requested"}
+    return None
+
+
 def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) -> ToolMessage:
     name = call.get("name", "")
     args = call.get("args") or {}
@@ -709,24 +809,36 @@ def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) 
         result = {"ok": False, "error": f"unknown tool: {name}"}
     else:
         try:
-            result = tool.invoke(args)
+            soft = None
+            context = state.get("task_context")
+            if context is not None:
+                context.check_known_failure()
+                tool.args_schema.model_validate(args)
+                soft = _closeout_delegation_result(context, call)
+            result = soft if soft is not None else tool.invoke(args)
         except Exception as exc:
             if state.get("task_context") is not None:
-                if isinstance(exc, (TaskProviderError, ReportedTaskToolFailure)):
+                if isinstance(exc, (TaskContextError, TaskCloseoutError, TaskProviderError, ReportedTaskToolFailure)):
                     raise
                 if isinstance(exc, TaskExecutionError):
+                    state["task_context"].record_terminal_root(
+                        "verification_command_failed" if str(exc) == "verification_command_failed" else "task_tool_failed")
                     writer(task_tool_failure_event("planner", name, exception=True))
                     raise
+                state["task_context"].record_terminal_root("task_tool_failed")
                 writer(task_tool_failure_event("planner", name,
                                                invalid_arguments=isinstance(exc, ValidationError),
                                                exception=not isinstance(exc, ValidationError)))
                 raise TaskExecutionError("task_tool_failed") from None
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if state.get("task_context") is not None and isinstance(result, dict) and result.get("ok") is False:
-        if str(result.get("error", "")).startswith("unknown tool:"):
+        if (str(result.get("error", "")).startswith("unknown tool:")
+                or (name == "CallCodeAgentTool" and result == {"ok": False, "error": "closeout_requested"}
+                    and state["task_context"].closeout.mode == CloseoutMode.CLOSING)):
             # Hallucinated tool name: model-visible and retryable, nothing executed.
             pass
         else:
+            state["task_context"].record_terminal_root("task_tool_failed")
             writer(task_tool_failure_event("planner", name, error=result.get("error")))
             raise TaskExecutionError("task_tool_failed")
     tool_message = ToolMessage(
@@ -736,6 +848,32 @@ def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) 
     )
     writer(_tool_result_event(tool_message, node="planner"))
     return tool_message
+
+
+def _task_verifier_tools(state, *, final_reply):
+    return [] if final_reply else [t for t in _tools_for(state, read_only=True)
+                                   if t.name in {"FileReadTool", "GrepTool", "NotepadReadTool"}]
+
+
+def _validate_closeout_verifier_group(calls, tools):
+    if not isinstance(calls, list) or len(calls) > 3:
+        raise TaskCloseoutError("phase_limit")
+    registry = {t.name: t for t in tools}
+    seen = set()
+    for call in calls:
+        if (not isinstance(call, dict) or not isinstance(call.get("id"), str) or not call["id"]
+                or call["id"] in seen or not isinstance(call.get("name"), str)
+                or not isinstance(call.get("args"), dict)):
+            raise TaskCloseoutError("phase_limit")
+        seen.add(call["id"])
+        if call["name"] in {"BashTool", "FileWriteTool", "FileEditTool", "NotepadAppendTool", "TodoUpdateTool"}:
+            raise TaskCloseoutError("phase_limit")
+        tool = registry.get(call["name"])
+        if tool is not None:
+            try:
+                tool.args_schema.model_validate(call["args"])
+            except (ValidationError, TypeError, ValueError):
+                raise TaskExecutionError("task_tool_failed") from None
 
 
 def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any], *, writer=None) -> ToolMessage:
@@ -748,8 +886,11 @@ def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any], *, wri
     else:
         try:
             result = tool.invoke(args)
+        except (TaskContextError, TaskCloseoutError):
+            raise
         except Exception as exc:
             if state.get("task_context") is not None:
+                state["task_context"].record_terminal_root("task_tool_failed")
                 if writer is not None:
                     writer(task_tool_failure_event("verifier", name,
                                                    invalid_arguments=isinstance(exc, ValidationError),
@@ -758,7 +899,9 @@ def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any], *, wri
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if state.get("task_context") is not None and isinstance(result, dict):
         if (result.get("ok") is False and type(result.get("exit_code")) is not int
+                and recovery_for(result.get("error")) is None
                 and not str(result.get("error", "")).startswith("unknown tool:")):
+            state["task_context"].record_terminal_root("task_tool_failed")
             if writer is not None:
                 writer(task_tool_failure_event("verifier", name, error=result.get("error")))
             raise TaskExecutionError("task_tool_failed")
@@ -769,6 +912,25 @@ def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any], *, wri
         name=name,
         tool_call_id=call.get("id") or f"{name}-call",
     )
+
+
+def _admit_task_retry(context):
+    with context._lock:
+        context.check_known_failure()
+        context.preflight_provider_budget()
+        if not context.closeout.admit_next_attempt(
+                calls_left=context.max_provider_calls - context.provider_calls,
+                tokens_left=context.max_total_tokens - context.reported_tokens):
+            raise TaskCloseoutError("budget_slots_insufficient")
+
+
+def _task_compression_purpose(state):
+    origin = state["task_context"].closeout.monitor_origin
+    if origin == "planner":
+        return CloseoutPurpose.PRE_COMPRESS
+    if origin == "verifier":
+        return CloseoutPurpose.POST_COMPRESS
+    raise TaskCloseoutError("phase_limit")
 
 
 def _compress_context_with_model(state: MokioGraphState) -> dict[str, Any]:
@@ -783,7 +945,11 @@ def _compress_context_with_model(state: MokioGraphState) -> dict[str, Any]:
         HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
     ]
     try:
-        response = _model_for(state, stage="context_compressor").invoke(messages)
+        response = _model_for(state, stage="context_compressor",
+                              purpose=_task_compression_purpose(state) if state.get("task_context") is not None
+                              else None).invoke(messages)
+        if state.get("task_context") is not None:
+            state["task_context"].check_known_failure()
         parsed = _extract_json(str(response.content))
         if parsed:
             return parsed

@@ -110,6 +110,23 @@ def test_budget_counts_calls_and_reported_tokens_across_bound_models() -> None:
     assert fake.calls == 2
 
 
+@pytest.mark.parametrize("overshoot", [0, 1])
+def test_expanded_budget_allows_verifier_then_stops_at_reported_limit(overshoot: int) -> None:
+    fake = FakeModel([response(198_000, 2_000), response(99_000, 1_000 + overshoot)])
+    context = TaskRunContext.for_fake_model(fake, max_provider_calls=24, max_total_tokens=300_000,
+                                          max_output_tokens_per_call=3072)
+    context.model(stage="code_agent").bind_tools([]).invoke([])
+    assert context.reported_tokens == 200_000
+    context.model(stage="verifier").invoke([])
+    assert context.reported_tokens == 300_000 + overshoot
+    usage = context.usage_snapshot()
+    assert usage["code_agent_calls"] == 1 and usage["code_agent_reported_tokens"] == 200_000
+    assert usage["verifier_calls"] == 1 and usage["verifier_reported_tokens"] == 100_000 + overshoot
+    with pytest.raises(openai_provider.TaskProviderError, match="^provider_budget_exhausted$"):
+        context.model(stage="verifier").invoke([])
+    assert fake.calls == 2 and context.provider_calls == 2
+
+
 def test_usage_snapshot_attributes_nested_bound_calls_and_failed_invocations() -> None:
     fake = FakeModel([response(3, 2), response(4, 3), RuntimeError("FAKE_PRIVATE_ERROR")])
     context = TaskRunContext.for_fake_model(fake, max_provider_calls=4, max_total_tokens=100,

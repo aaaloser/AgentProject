@@ -17,6 +17,8 @@ from mokioclaw.dashboard.task_events import project_task_event, summarize_agent_
 from mokioclaw.dashboard.task_executor import TaskExecutionError
 from mokioclaw.providers.openai_provider import ProviderSettings
 from mokioclaw.providers.openai_provider import TaskProviderError
+from mokioclaw.dashboard.task_context import TaskContextError
+from mokioclaw.core.task_closeout import TaskCloseoutError
 
 
 # Two separately bounded 12,000-character command streams can expand sixfold
@@ -32,6 +34,7 @@ def run_projected_workflow(
     *,
     stream: Callable[..., Iterator[dict]] | None = None,
     max_attempts: int | None = None,
+    handoff_observer: Callable[[int, str], None] | None = None,
 ) -> None:
     """Keep raw workflow events inside the worker; emit only fixed summaries."""
     if stream is None:
@@ -44,20 +47,66 @@ def run_projected_workflow(
         kwargs["max_attempts"] = max_attempts
     try:
         for raw in stream(description, **kwargs):
+            if handoff_observer is not None and isinstance(raw, dict) and raw.get("type") == "custom_event":
+                event = raw.get("event")
+                if (isinstance(event, dict) and event.get("type") == "handoff_result"
+                        and event.get("from") == "codeAgent" and event.get("to") == "planner"
+                        and type(event.get("result")) is str):
+                    try:
+                        handoff_observer(context.current_attempt, event["result"])
+                    except Exception:
+                        observation = getattr(context, "observation", None)
+                        if observation is not None:
+                            observation.invalidate()
             for summary in summarize_agent_event(raw, tuple(getattr(context, "fixed_verification_commands", ()))):
                 projected = {"attempt_id": context.current_attempt, **summary}
                 if summary == {"kind": "stage", "phase": "complete"}:
                     final_events.append(projected)
                 else:
                     emit(projected)
+    except Exception as exc:
+        closeout = getattr(context, "closeout", None)
+        if closeout is not None:
+            closeout.finish(failed=True)
+        root = getattr(context, "_terminal_root", None)
+        if isinstance(exc, TaskContextError):
+            resolver = getattr(context, "resolve_context_failure", None)
+            root = resolver(exc) if callable(resolver) else root
+        if isinstance(exc, TaskCloseoutError):
+            root = context.resolve_closeout_failure(exc)
+        if root in {"task_tool_failed", "verification_command_failed"}:
+            raise TaskExecutionError(root) from None
+        if root in {
+            "provider_failed", "provider_auth_failed", "provider_rate_limited",
+            "provider_invalid_request", "provider_transport_failed", "provider_server_failed",
+            "usage_unavailable", "provider_budget_exhausted",
+        }:
+            raise TaskProviderError(root) from None
+        raise
     finally:
-        snapshot = getattr(context, "usage_snapshot", None)
-        if callable(snapshot):
-            emit({"attempt_id": context.current_attempt, "kind": "budget_usage", **snapshot()})
+        primary = sys.exc_info()[0] is not None
+        try:
+            snapshot = getattr(context, "usage_snapshot", None)
+            if callable(snapshot):
+                emit({"attempt_id": context.current_attempt, "kind": "budget_usage", **snapshot()})
+        except Exception:
+            if getattr(context, "closeout", None) is not None:
+                context.closeout.finish(failed=True)
+            if not primary:
+                raise
     if getattr(context, "usage_unavailable", False):
+        if getattr(context, "closeout", None) is not None:
+            context.closeout.finish(failed=True)
         raise TaskProviderError("usage_unavailable")
-    for event in final_events:
-        emit(event)
+    try:
+        for event in final_events:
+            emit(event)
+    except Exception:
+        if getattr(context, "closeout", None) is not None:
+            context.closeout.finish(failed=True)
+        raise
+    if getattr(context, "closeout", None) is not None:
+        context.closeout.finish(failed=False)
 
 
 def _run_real_task(
@@ -68,6 +117,7 @@ def _run_real_task(
     workspace: Path | None = None,
     context_factory: Callable[..., object] | None = None,
     stream: Callable[..., Iterator[dict]] | None = None,
+    diagnostic_client=None,
 ) -> None:
     """Build an explicit Web Task context; construction itself makes no provider call."""
     from mokioclaw.core.agent import TaskRunContext
@@ -109,14 +159,25 @@ def _run_real_task(
     )
     settings = ProviderSettings.from_environment()
     factory = context_factory or TaskRunContext.from_settings
-    context = factory(settings, **budgets)
+    observation_kwargs = {}
+    if diagnostic_client is not None:
+        from mokioclaw.core.task_observation import TaskObservation
+        observation_kwargs["observation"] = TaskObservation(task_id, diagnostic_client)
+    context = factory(settings, **budgets, **observation_kwargs)
+    from mokioclaw.dashboard.task_context import TaskToolServices
+    services = TaskToolServices(filesystem)
     context.attach_tools(
-        filesystem, build_task_graph_tools(filesystem, gateway, work),
-        gateway=gateway, verification_commands=tuple(commands),
+        filesystem, build_task_graph_tools(filesystem, gateway, work, services=services),
+        services=services, gateway=gateway, verification_commands=tuple(commands),
     )
-    run_projected_workflow(
-        description, work, context, emit, stream=stream, max_attempts=payload["max_attempts"],
-    )
+    try:
+        run_projected_workflow(
+            description, work, context, emit, stream=stream, max_attempts=payload["max_attempts"],
+            **({"handoff_observer": diagnostic_client.accept_handoff} if diagnostic_client is not None else {}),
+        )
+    finally:
+        if diagnostic_client is not None:
+            diagnostic_client.finish(context.usage_snapshot())
 
 
 def filtered_worker_environment(
@@ -220,7 +281,7 @@ def consume_worker_messages(
                     "worker_failed", "provider_failed", "usage_unavailable", "task_tool_failed",
                     "provider_budget_exhausted", "provider_auth_failed", "provider_rate_limited",
                     "provider_invalid_request", "provider_transport_failed", "provider_server_failed",
-                    "verification_command_failed", "timed_out",
+                    "verification_command_failed", "timed_out", "task_context_error", "task_closeout_incomplete",
                 }:
                     raise ValueError("Invalid worker failure")
                 result["failure_kind"] = failure
@@ -326,10 +387,13 @@ class TaskWorkerLauncher:
     def __init__(
         self, provider_settings: ProviderSettings | None = None,
         start_payload: Callable[[str], dict] | None = None,
+        *,
+        diagnostic_bootstrap: Callable[[str], object | None] | None = None,
     ) -> None:
         self._workers: dict[int, tuple[subprocess.Popen, socket.socket, str, str]] = {}
         self._provider_settings = provider_settings
         self._start_payload = start_payload
+        self._diagnostic_bootstrap = diagnostic_bootstrap
 
     def launch(self, task_id: str, work: Path) -> ProcessIdentity:
         if not work.is_dir() or work.is_symlink():
@@ -378,6 +442,12 @@ class TaskWorkerLauncher:
         start = {"kind": "start", "task_id": worker[3]}
         if self._start_payload is not None:
             start["payload"] = self._start_payload(worker[3])
+        if self._diagnostic_bootstrap is not None:
+            from mokioclaw.dashboard.task_diagnostic_ipc import bootstrap_to_wire
+            bootstrap = self._diagnostic_bootstrap(worker[3])
+            if bootstrap is None:
+                raise ValueError("calibration_observation_invalid")
+            start["diagnostic"] = bootstrap_to_wire(bootstrap)
         _send(channel, start)
         if _receive(channel) != {"kind": "started"}:
             raise ValueError("Worker did not acknowledge start")
@@ -465,6 +535,7 @@ class TaskWorkerLauncher:
 def _worker_main(
     port: int, *, token_line: str | None = None,
     run_task: Callable[[dict, Callable[[dict], None], RemoteTaskGateway], None] | None = None,
+    diagnostic_factory=None,
 ) -> None:
     token = (sys.stdin.readline() if token_line is None else token_line).strip()
     if len(token) < 32 or len(token) > 128:
@@ -477,6 +548,16 @@ def _worker_main(
         first = _receive(channel)
         if first.get("kind") != "start" or not isinstance(first.get("task_id"), str):
             return
+        diagnostic = None
+        if "diagnostic" in first:
+            try:
+                from mokioclaw.dashboard.task_diagnostic_ipc import bootstrap_from_wire, WorkerDiagnosticClient
+                bootstrap = bootstrap_from_wire(first["diagnostic"])
+                if bootstrap.role != "worker" or bootstrap.task_id != first["task_id"]:
+                    raise ValueError
+                diagnostic = (diagnostic_factory or WorkerDiagnosticClient)(bootstrap)
+            except Exception:
+                return
         _send(channel, {"kind": "started"})
         channel.settimeout(None)
         selected_runner = run_task or (_run_real_task if "payload" in first else None)
@@ -492,7 +573,12 @@ def _worker_main(
 
             try:
                 gateway = RemoteTaskGateway(channel, first["task_id"], Path.cwd())
-                selected_runner(first, send_summary, gateway)
+                try:
+                    selected_runner(first, send_summary, gateway,
+                                    **({"diagnostic_client": diagnostic} if diagnostic is not None else {}))
+                finally:
+                    if diagnostic is not None:
+                        diagnostic.close()
             except TaskProviderError as exc:
                 kind = str(exc)
                 if kind not in {
@@ -505,6 +591,10 @@ def _worker_main(
             except TaskExecutionError as exc:
                 kind = "verification_command_failed" if str(exc) == "verification_command_failed" else "task_tool_failed"
                 _send(channel, {"kind": "done", "outcome": "failed", "failure_kind": kind})
+            except TaskCloseoutError:
+                _send(channel, {"kind": "done", "outcome": "failed", "failure_kind": "task_closeout_incomplete"})
+            except TaskContextError:
+                _send(channel, {"kind": "done", "outcome": "failed", "failure_kind": "task_context_error"})
             except Exception:
                 _send(channel, {"kind": "done", "outcome": "failed", "failure_kind": "worker_failed"})
             else:

@@ -36,6 +36,7 @@ timeout = 30
 testpaths = ["tests"]
 markers = [
     "docker: requires a local Docker daemon and the evaluation image",
+    "continuation_native_files: separately authorized synthetic Windows file acceptance",
 ]
 
 [tool.ruff]

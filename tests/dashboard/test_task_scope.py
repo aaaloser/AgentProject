@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from mokioclaw.dashboard.task_executor import TaskExecutionError
 from mokioclaw.dashboard.task_filesystem import TaskFilesystem
+from mokioclaw.dashboard.task_context import TaskToolServices
 from mokioclaw.dashboard.task_events import task_tool_failure_event
 from mokioclaw.dashboard.task_tools import build_task_file_tools, persist_todos_for_runtime
 from mokioclaw.agents.code_agent import execute_code_agent_tool, run_code_agent
@@ -34,7 +35,9 @@ def task_tools(tmp_path: Path):
     prepared = SimpleNamespace(task_id="task_1234567890123456", work=work, baseline=baseline,
                                root=work.parents[1])
     fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
-    return {tool.name: tool for tool in build_task_file_tools(fs)}, work
+    services = TaskToolServices(fs)
+    services.begin_delegation(1)
+    return {tool.name: tool for tool in build_task_file_tools(fs, services=services)}, work
 
 
 def test_read_edit_and_write_existing_file_only_inside_source_scope(tmp_path: Path) -> None:
@@ -44,6 +47,7 @@ def test_read_edit_and_write_existing_file_only_inside_source_scope(tmp_path: Pa
     edited = tools["FileEditTool"].invoke({"file_path": "src/a.py", "old_text": "alpha", "new_text": "gamma"})
     assert edited["ok"]
     assert (work / "src" / "a.py").read_text(encoding="utf-8") == "gamma\nbeta\n"
+    assert tools["FileReadTool"].invoke({"file_path": "src/a.py"})["coverage_complete"]
     written = tools["FileWriteTool"].invoke({"file_path": "src/a.py", "content": "delta\n"})
     assert written["ok"]
     assert (work / "src" / "a.py").read_text(encoding="utf-8") == "delta\n"
@@ -206,10 +210,17 @@ def test_task_code_agent_gets_scoped_edit_first_guidance_without_mandatory_todo_
             assert "rewrite the file in full" in prompt
             assert "must match exactly once" in prompt
             assert "Before starting a todo" not in prompt
-            return AIMessage(content="done")
+            return AIMessage(content="done", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
 
-    result = run_code_agent({"runtime": runtime, "task": "repair"}, "repair",
-                            tools_override=[], model_override=RecordingModel())
+    from mokioclaw.core.agent import TaskRunContext
+    # Guidance is inspected after the new >=8-call repair admission.
+    context = TaskRunContext.for_fake_model(RecordingModel(), max_provider_calls=8, max_total_tokens=100,
+                                           max_output_tokens_per_call=20)
+    services = TaskToolServices(fs)
+    selected = build_task_file_tools(fs, services=services)
+    context.attach_tools(fs, selected, services=services)
+    result = run_code_agent({"runtime": runtime, "task": "repair", "task_context": context}, "repair",
+                            tools_override=selected, model_override=context.model(stage="code_agent"))
     assert result["ok"] and result["summary"] == "done"
 
 
