@@ -163,3 +163,41 @@ def test_missing_final_newline_never_claims_a_complete_patch(tmp_path: Path) -> 
     assert result.status == "patch_unavailable"
     assert result.reason == "missing_final_newline"
     assert not (prepared.root / "artifacts" / "patch.diff").exists()
+
+
+def test_runtime_cache_artifacts_do_not_block_or_enter_patch(tmp_path: Path) -> None:
+    patch = importlib.import_module("mokioclaw.dashboard.task_patch")
+    prepared = _prepared(tmp_path)
+    (prepared.work / "src" / "a.py").write_bytes(b"after\n")
+    pycache = prepared.work / "src" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "a.cpython-313.pyc").write_bytes(b"\x00binary\x00")
+    (prepared.work / "src" / "loose.pyc").write_bytes(b"\x00\x01")
+    pytest_cache = prepared.work / ".pytest_cache" / "v"
+    pytest_cache.mkdir(parents=True)
+    (pytest_cache / "cache.nodeids").write_bytes(b"[]")
+    result = patch.collect_patch(prepared, ("src/",), ".mokioclaw/task-scratch/")
+    assert result.status == "available"
+    assert result.changed_files == ("src/a.py",)
+
+
+def test_cache_noise_is_pruned_from_baseline_and_work_symmetrically(tmp_path: Path) -> None:
+    patch = importlib.import_module("mokioclaw.dashboard.task_patch")
+    prepared = _prepared(tmp_path)
+    for side in (prepared.baseline, prepared.work):
+        cached = side / "__pycache__"
+        cached.mkdir()
+        (cached / "a.pyc").write_bytes(b"\x00\x01")
+    (prepared.work / "src" / "a.py").write_bytes(b"after\n")
+    result = patch.collect_patch(prepared, ("src/",), ".mokioclaw/task-scratch/")
+    assert result.status == "available"
+    assert result.changed_files == ("src/a.py",)
+
+
+def test_non_cache_out_of_scope_change_still_blocks_patch(tmp_path: Path) -> None:
+    patch = importlib.import_module("mokioclaw.dashboard.task_patch")
+    prepared = _prepared(tmp_path)
+    (prepared.work / "outside.txt").write_bytes(b"unauthorized")
+    result = patch.collect_patch(prepared, ("src/",), ".mokioclaw/task-scratch/")
+    assert result.status == "patch_unavailable"
+    assert result.reason == "change_outside_write_scope"

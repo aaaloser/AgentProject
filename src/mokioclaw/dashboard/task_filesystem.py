@@ -7,6 +7,7 @@ that need an atomic relative-directory handle remain unavailable on Windows.
 from __future__ import annotations
 
 import os
+import hashlib
 import stat
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,6 +20,11 @@ if TYPE_CHECKING:
 
 class TaskFilesystemError(ValueError):
     """A task file operation is outside its safe, supported boundary."""
+
+
+class TaskFileRevisionChanged(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("task_read_revision_changed")
 
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -157,12 +163,21 @@ class TaskFilesystem:
                 raise TaskFilesystemError("Task file limit exceeded")
             return content
 
-    def write_bytes(self, path: str, content: bytes, *, scratch: bool = False) -> None:
+    def canonical_path(self, path: str, *, scratch: bool = False) -> str:
+        relative = self._authorize(path, scratch=scratch)
+        return os.path.normcase(relative).replace("\\", "/")
+
+    def write_bytes(self, path: str, content: bytes, *, scratch: bool = False,
+                    expected_revision: str | None = None) -> None:
         if not isinstance(content, bytes) or len(content) > MAX_FILE_BYTES:
             raise TaskFilesystemError("Task file limit exceeded")
         relative = self._authorize(path, write=True, scratch=scratch)
         descriptor = open_existing(self.prepared.work, relative, write=True)
         with os.fdopen(descriptor, "r+b") as stream:
+            if expected_revision is not None:
+                before = stream.read(MAX_FILE_BYTES + 1)
+                if len(before) > MAX_FILE_BYTES or hashlib.sha256(before).hexdigest() != expected_revision:
+                    raise TaskFileRevisionChanged()
             stream.seek(0)
             stream.write(content)
             stream.truncate()

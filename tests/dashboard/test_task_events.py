@@ -46,10 +46,27 @@ def test_budget_usage_projection_keeps_only_six_fixed_stage_counts() -> None:
     assert "FAKE_PRIVATE" not in repr(projected) and "private.invalid" not in repr(projected)
 
 
+@pytest.mark.parametrize("entry_calls,code_calls", [(20, 0), (21, 0), (24, 0), (1, 20), (1, 23)])
+def test_budget_usage_projection_accepts_amended_single_and_total_call_limits(
+    entry_calls: int, code_calls: int,
+) -> None:
+    events = importlib.import_module("mokioclaw.dashboard.task_events")
+    usage = {f"{stage}_{metric}": 0 for stage in (
+        "entry", "chat", "planner", "code_agent", "verifier", "context_compressor",
+    ) for metric in ("calls", "reported_tokens")}
+    usage.update(entry_calls=entry_calls, entry_reported_tokens=entry_calls,
+                 code_agent_calls=code_calls, code_agent_reported_tokens=code_calls)
+    projected = events.project_task_event({
+        "kind": "budget_usage", **usage, "response": "FAKE_PRIVATE_RESPONSE",
+    }, "task_1234567890123456", 1, 1)
+    assert projected.data == usage
+    assert "FAKE_PRIVATE_RESPONSE" not in repr(projected)
+
+
 @pytest.mark.parametrize("change", [
-    {"entry_calls": True}, {"entry_calls": -1}, {"entry_calls": 21},
+    {"entry_calls": True}, {"entry_calls": -1}, {"entry_calls": 25},
     {"entry_reported_tokens": -1}, {"entry_reported_tokens": "5"},
-    {"code_agent_calls": 20}, {"planner_reported_tokens": None},
+    {"code_agent_calls": 24}, {"planner_reported_tokens": None},
     {"planner_reported_tokens": 5},
 ])
 def test_budget_usage_projection_rejects_invalid_or_incomplete_counts(change: dict) -> None:

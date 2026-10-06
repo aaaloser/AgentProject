@@ -73,7 +73,8 @@ def test_exact_work_mount_and_restricted_container_arguments(tmp_path: Path) -> 
     mount = create[create.index("--mount") + 1]
     assert mount == f"type=bind,src={tmp_path / TASK / 'workspace' / 'work'},dst=/workspace"
     assert "baseline" not in joined and "docker.sock" not in joined
-    assert "MOKIO_TASK_API_KEY" not in joined and "--env" not in create
+    assert "MOKIO_TASK_API_KEY" not in joined and create.count("--env") == 1
+    assert create[create.index("--env") + 1] == "PYTHONDONTWRITEBYTECODE=1"
     assert f"mokioclaw.instance_id={INSTANCE}" in joined
     assert f"mokioclaw.task_id={TASK}" in joined
     assert f"mokioclaw.command_request_id={REQUEST}" in joined

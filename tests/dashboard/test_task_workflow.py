@@ -289,12 +289,15 @@ def test_parent_consumes_only_valid_worker_event_and_done_messages() -> None:
         right.close()
 
 
-def test_parent_accepts_only_projected_budget_usage_from_worker() -> None:
+@pytest.mark.parametrize("calls", [20, 21, 24])
+def test_parent_accepts_only_projected_budget_usage_from_worker(calls: int) -> None:
     usage = {f"{stage}_{metric}": 0 for stage in (
         "entry", "chat", "planner", "code_agent", "verifier", "context_compressor",
     ) for metric in ("calls", "reported_tokens")}
     usage["entry_calls"] = 1
     usage["entry_reported_tokens"] = 5
+    usage["code_agent_calls"] = calls - 1
+    usage["code_agent_reported_tokens"] = calls - 1
     left, right = socket.socketpair()
     try:
         task_worker._send(right, {"kind": "event", "summary": {
@@ -622,7 +625,8 @@ def test_worker_builds_task_context_from_explicit_payload_without_provider_call(
         current_attempt = 1
         usage_unavailable = False
 
-        def attach_tools(self, filesystem, tools, *, gateway, verification_commands):
+        def attach_tools(self, filesystem, tools, *, services, gateway, verification_commands):
+            assert services.filesystem is filesystem
             captured["filesystem"] = filesystem
             captured["tools"] = {tool.name for tool in tools}
             captured["commands"] = verification_commands
@@ -657,6 +661,56 @@ def test_worker_builds_task_context_from_explicit_payload_without_provider_call(
     assert captured["gateway"] is gateway
     assert "BashTool" in captured["tools"] and "FileReadTool" in captured["tools"]
     assert sent == [{"attempt_id": 1, "kind": "stage", "phase": "complete"}]
+
+
+@pytest.mark.parametrize("max_calls,max_tokens", [
+    (20, 150_000), (22, 150_000), (24, 200_000),
+    (24, 200_001), (24, 250_000), (24, 300_000),
+])
+def test_worker_starts_with_amended_budgets_using_real_task_context(
+    tmp_path: Path, monkeypatch, max_calls: int, max_tokens: int,
+) -> None:
+    from mokioclaw.providers import openai_provider
+
+    work = tmp_path / "task_1234567890123456" / "workspace" / "work"
+    (work / "src").mkdir(parents=True)
+    monkeypatch.setenv("MOKIO_TASK_API_KEY", "FAKE_TASK_KEY")
+    monkeypatch.setenv("MOKIO_TASK_MODEL", "fake-model")
+    monkeypatch.setenv("MOKIO_TASK_BASE_URL", "https://task.invalid/v1")
+    monkeypatch.setattr(openai_provider, "ChatOpenAI", lambda **_kwargs: pytest.fail("provider initialized"))
+
+    def fake_stream(description, *, workspace, task_context, max_attempts):
+        assert description == "repair" and workspace == work and max_attempts == 1
+        assert isinstance(task_context, TaskRunContext)
+        assert task_context.max_provider_calls == max_calls
+        assert task_context.max_total_tokens == max_tokens
+        assert task_context.fixed_verification_commands == ("python -m pytest -q",)
+        yield {"type": "graph_event", "event": {"final": {"response": "FAKE_PRIVATE"}}}
+
+    start = {"kind": "start", "task_id": "task_1234567890123456", "payload": {
+        "description": "repair", "source_read_scope": ["src/"], "source_write_scope": ["src/"],
+        "task_scratch_scope": ".mokioclaw/task-scratch/", "max_attempts": 1,
+        "max_provider_calls": max_calls, "max_total_tokens": max_tokens,
+        "max_output_tokens_per_call": 3072, "verification_commands": ["python -m pytest -q"],
+    }}
+    sent = []
+    gateway = type("FakeGateway", (), {"task_gateway": True})()
+    task_worker._run_real_task(start, sent.append, gateway, workspace=work, stream=fake_stream)
+
+    assert [event["kind"] for event in sent] == ["budget_usage", "stage"]
+    usage = sent[0]
+    assert usage["entry_calls"] == 0 and usage["entry_reported_tokens"] == 0
+    assert sent[1] == {"attempt_id": 1, "kind": "stage", "phase": "complete"}
+    assert "FAKE_PRIVATE" not in repr(sent)
+
+
+@pytest.mark.parametrize("max_calls,max_tokens", [(0, 150_000), (20, 0), (25, 150_000), (24, 300_001)])
+def test_task_context_rejects_budgets_outside_amended_limits(max_calls: int, max_tokens: int) -> None:
+    with pytest.raises(TaskProviderError, match="^invalid_provider_budget$"):
+        TaskRunContext.from_settings(
+            ProviderSettings("FAKE_TASK_KEY", "fake-model", "https://task.invalid/v1"),
+            max_provider_calls=max_calls, max_total_tokens=max_tokens, max_output_tokens_per_call=3072,
+        )
 
 
 def test_configuring_agent_capability_constructs_no_provider_or_container(
@@ -736,3 +790,93 @@ def test_live_approval_is_bound_to_current_attempt_and_restores_state(
                                            request.canonical_digest(), True)
     finally:
         service.close()
+
+
+@pytest.mark.parametrize("calls,finish,outcome,failure", [
+    (20, "complete", "completed", None),
+    (21, "complete", "completed", None),
+    (24, "complete", "completed", None),
+    (24, "budget", "failed", "provider_budget_exhausted"),
+    (21, "tool", "failed", "task_tool_failed"),
+    (21, "worker", "failed", "worker_failed"),
+])
+def test_worker_loopback_preserves_amended_usage_and_original_outcome(
+    tmp_path: Path, monkeypatch, calls: int, finish: str, outcome: str, failure: str | None,
+) -> None:
+    from mokioclaw.providers import openai_provider
+
+    monkeypatch.setattr(openai_provider, "ChatOpenAI", lambda **_kwargs: pytest.fail("provider initialized"))
+
+    class Model:
+        def invoke(self, _messages):
+            return SimpleNamespace(usage_metadata={"total_tokens": 1})
+
+    context = TaskRunContext.for_fake_model(
+        Model(), max_provider_calls=24, max_total_tokens=200_000, max_output_tokens_per_call=3072,
+    )
+
+    def fake_stream(*_args, **_kwargs):
+        context.model(stage="entry").invoke([])
+        for _ in range(calls - 1):
+            context.model(stage="code_agent").invoke([])
+        if finish == "budget":
+            context.model(stage="code_agent").invoke([])
+        if finish == "tool":
+            raise TaskExecutionError("FAKE_PRIVATE_TOOL_DETAIL")
+        if finish == "worker":
+            raise RuntimeError("FAKE_PRIVATE_WORKER_DETAIL")
+        yield {"type": "graph_event", "event": {"final": {"response": "FAKE_PRIVATE_RESPONSE"}}}
+
+    def fake_run(_start, emit, _gateway):
+        run_projected_workflow("fake repair", tmp_path, context, emit, stream=fake_stream)
+
+    task_id = "task_1234567890123456"
+    token = "test-token-123456789012345678901234567890"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(3)
+        worker = threading.Thread(target=task_worker._worker_main, args=(listener.getsockname()[1],),
+                                  kwargs={"token_line": token, "run_task": fake_run}, daemon=True)
+        worker.start()
+        channel, _ = listener.accept()
+        with channel:
+            channel.settimeout(3)
+            assert task_worker._receive(channel) == {"kind": "hello", "token": token}
+            task_worker._send(channel, {"kind": "ready"})
+            task_worker._send(channel, {"kind": "start", "task_id": task_id})
+            assert task_worker._receive(channel) == {"kind": "started"}
+            sent, done = [], []
+            task_worker.consume_worker_messages(channel, task_id, sent.append, done.append)
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+
+    expected_done = {"outcome": outcome}
+    if failure is not None:
+        expected_done["failure_kind"] = failure
+    assert done == [expected_done]
+    assert [event["kind"] for event in sent] == (["budget_usage", "stage"] if outcome == "completed" else ["budget_usage"])
+    assert sent[0]["entry_calls"] == 1 and sent[0]["entry_reported_tokens"] == 1
+    assert sent[0]["code_agent_calls"] == calls - 1 and sent[0]["code_agent_reported_tokens"] == calls - 1
+    assert "FAKE_PRIVATE" not in repr(sent) + repr(done)
+
+
+def test_worker_gateway_rejects_invalid_command_arguments_before_sending(tmp_path: Path) -> None:
+    left, right = socket.socketpair()
+    right.settimeout(1)
+    left.settimeout(1)
+    task_id = "task_1234567890123456"
+    gateway = task_worker.RemoteTaskGateway(right, task_id, tmp_path)
+    try:
+        for timeout, output in ((1200, 100), (0, 100), (5, 0), (5, 20000)):
+            result = gateway.run(workspace=tmp_path, command="echo fake",
+                                 timeout_seconds=timeout, max_output_chars=output)
+            assert result == {"ok": False, "error": "invalid_task_command"}
+        result = gateway.run(workspace=tmp_path, command="echo fake\0x",
+                             timeout_seconds=5, max_output_chars=100)
+        assert result == {"ok": False, "error": "invalid_task_command"}
+        with pytest.raises(socket.timeout):
+            left.recv(1)
+    finally:
+        left.close()
+        right.close()

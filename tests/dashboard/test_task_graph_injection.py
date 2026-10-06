@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+from mokioclaw.dashboard.task_context import TaskToolServices
 from mokioclaw.core.agent import TaskRunContext, create_runtime, stream_agent_events
 from mokioclaw.core.state import RuntimeState
 from mokioclaw.dashboard.task_filesystem import TaskFilesystem
@@ -35,8 +36,10 @@ class FakeModel:
 
 
 def context(model: FakeModel) -> TaskRunContext:
+    # These fixtures exercise tool/provider/retry contracts after closeout admission.
+    # Small budgets remain explicitly rejected in test_task_closeout_agents.
     return TaskRunContext.for_fake_model(
-        model, max_provider_calls=3, max_total_tokens=50, max_output_tokens_per_call=20,
+        model, max_provider_calls=24, max_total_tokens=1000, max_output_tokens_per_call=20,
     )
 
 
@@ -137,7 +140,8 @@ def test_failed_planner_tool_reaches_public_fake_workflow_before_stop(tmp_path: 
         PlannerFailureModel(), max_provider_calls=3, max_total_tokens=50,
         max_output_tokens_per_call=20,
     )
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     projected = []
     with pytest.raises(TaskExecutionError, match="task_tool_failed"):
         run_projected_workflow("repair", work, ctx, projected.append, max_attempts=1)
@@ -174,10 +178,11 @@ def test_failed_code_agent_file_tool_reports_inner_tool_once(tmp_path: Path) -> 
             })
 
     ctx = TaskRunContext.for_fake_model(
-        FileFailureModel(), max_provider_calls=3, max_total_tokens=50,
+        FileFailureModel(), max_provider_calls=10, max_total_tokens=1000,
         max_output_tokens_per_call=20,
     )
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     projected = []
     with pytest.raises(TaskExecutionError, match="task_tool_failed"):
         run_projected_workflow("repair", work, ctx, projected.append, max_attempts=1)
@@ -235,9 +240,10 @@ def test_code_agent_and_verifier_receive_only_task_tools_and_same_gateway(
             return {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
 
     gateway = FakeGateway()
-    tools = build_task_graph_tools(fs, gateway, work)
+    services = TaskToolServices(fs)
+    tools = build_task_graph_tools(fs, gateway, work, services=services)
     ctx = context(FakeModel("unused"))
-    ctx.attach_tools(fs, tools)
+    ctx.attach_tools(fs, tools, services=services)
     captured = {}
 
     def fake_code_agent(_state, _instruction, *, writer, tools_override, model_override):
@@ -267,7 +273,8 @@ def test_task_runtime_and_stream_entry_skip_dotenv_and_force_safe_modes(
     fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
     model = FakeModel('{"route":"workflow","reason":"task","confidence":0.99}')
     ctx = context(model)
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     monkeypatch.setattr("mokioclaw.core.agent.load_dotenv", lambda: pytest.fail("dotenv was read"))
     monkeypatch.setattr(nodes, "create_model", lambda: pytest.fail("legacy provider used"))
     runtime = create_runtime(work, task_context=ctx)
@@ -294,7 +301,8 @@ def test_provider_failure_in_task_planner_does_not_become_a_retryable_tool_messa
     runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off",
                            allow_web_search=False)
     ctx = context(FakeModel("unused"))
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     monkeypatch.setattr(nodes, "run_code_agent", lambda *_args, **_kwargs:
                         (_ for _ in ()).throw(TaskProviderError("provider_failed")))
     state = {"runtime": runtime, "task": "repair", "task_context": ctx, "todos": []}
@@ -314,7 +322,8 @@ def test_planner_reports_outer_tool_when_failure_has_no_inner_diagnostic(
     runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off",
                            allow_web_search=False)
     ctx = context(FakeModel("unused"))
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     monkeypatch.setattr(nodes, "run_code_agent", lambda *_args, **_kwargs:
                         (_ for _ in ()).throw(TaskExecutionError("task_tool_failed")))
     state = {"runtime": runtime, "task": "repair", "task_context": ctx, "todos": []}
@@ -334,7 +343,8 @@ def test_task_verifier_tool_denial_terminates_instead_of_becoming_model_feedback
     fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
     runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off")
     ctx = context(FakeModel("unused"))
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     state = {"runtime": runtime, "task": "repair", "task_context": ctx}
     with pytest.raises(TaskExecutionError, match="task_tool_failed"):
         nodes._execute_read_only_tool(state, {"name": "BashTool", "args": {"command": "echo denied"}})
@@ -363,7 +373,8 @@ def test_only_explicit_verifier_failure_advances_gateway_attempt(tmp_path: Path)
     gateway = FakeGateway()
     model = FakeModel('{"passed":false,"reason":"fixture failed","checks":[],"recommended_next_instruction":"fix"}')
     ctx = context(model)
-    ctx.attach_tools(fs, build_task_graph_tools(fs, gateway, work), gateway=gateway)
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, gateway, work, services=services), services=services, gateway=gateway)
     state = {"runtime": runtime, "task": "repair", "task_context": ctx, "attempts": 0,
              "max_attempts": 2, "messages": []}
     verdict = nodes.verifier_node(state)
@@ -382,7 +393,8 @@ def test_invalid_task_verifier_response_does_not_trigger_retry(tmp_path: Path) -
     runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off",
                            allow_web_search=False)
     ctx = context(FakeModel("not JSON"))
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     with pytest.raises(TaskExecutionError, match="verifier_invalid"):
         nodes.verifier_node({"runtime": runtime, "task": "repair", "task_context": ctx,
                              "attempts": 0, "max_attempts": 2, "messages": []})
@@ -415,7 +427,8 @@ def test_fixed_verification_command_uses_same_gateway_with_actual_evidence(
 
     gateway = FakeGateway()
     ctx = context(FakeModel('{"passed":true,"reason":"ok","checks":[]}'))
-    ctx.attach_tools(fs, build_task_graph_tools(fs, gateway, work), gateway=gateway,
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, gateway, work, services=services), services=services, gateway=gateway,
                      verification_commands=("python -m pytest -q",))
     state = {"runtime": runtime, "task": "repair", "task_context": ctx,
              "attempts": 0, "max_attempts": 1, "messages": []}
@@ -440,7 +453,8 @@ def test_model_claim_without_executed_verification_is_not_a_pass(tmp_path: Path)
     runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off",
                            allow_web_search=False)
     ctx = context(FakeModel('{"passed":true,"reason":"claimed","checks":[]}'))
-    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
     result = nodes.verifier_node({"runtime": runtime, "task": "repair", "task_context": ctx,
                                   "attempts": 0, "max_attempts": 2, "messages": []})
     assert result["passed"] is False and result["context_next_node"] == "final"
@@ -509,9 +523,11 @@ def test_fake_full_graph_retries_only_after_verifier_failure_and_keeps_work(tmp_
 
     gateway = FakeGateway()
     model = WorkflowModel()
-    ctx = TaskRunContext.for_fake_model(model, max_provider_calls=20, max_total_tokens=100,
+    # Retry includes one starting planner, one repair, seven reserved slots.
+    ctx = TaskRunContext.for_fake_model(model, max_provider_calls=20, max_total_tokens=1000,
                                         max_output_tokens_per_call=20)
-    ctx.attach_tools(fs, build_task_graph_tools(fs, gateway, work), gateway=gateway,
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, gateway, work, services=services), services=services, gateway=gateway,
                      verification_commands=("python -m pytest -q",))
     events = []
     projected = []
@@ -542,3 +558,86 @@ def test_fake_full_graph_retries_only_after_verifier_failure_and_keeps_work(tmp_
         "verifier_calls": 2, "verifier_reported_tokens": 10,
         "context_compressor_calls": 0, "context_compressor_reported_tokens": 0,
     }
+
+
+def test_failed_edit_match_returns_to_model_and_attempt_continues(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    (work / "src" / "a.py").write_text("alpha\nbeta\n", encoding="utf-8", newline="\n")
+    prepared = SimpleNamespace(task_id="task_1234567890123456", work=work,
+                               baseline=tmp_path / "baseline", root=tmp_path)
+    fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
+
+    class RetryEditModel:
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, messages):
+            system = str(messages[0].content)
+            if "intent router" in system:
+                content, calls = '{"route":"workflow","reason":"task","confidence":0.99}', []
+            elif "planner/supervisor" in system:
+                if isinstance(messages[-1], ToolMessage) and json.loads(messages[-1].content).get("ok") is True:
+                    content, calls = "done", []
+                else:
+                    content, calls = "", [{"name": "CallCodeAgentTool", "id": "handoff",
+                                           "args": {"instruction": "repair"}}]
+            elif "codeAgent" in system:
+                last = str(messages[-1].content)
+                if isinstance(messages[-1], ToolMessage) and json.loads(last).get("ok") is True:
+                    content, calls = "done", []
+                elif "task_edit_match_failed" in last:
+                    content, calls = "", [{"name": "FileEditTool", "id": "good-edit",
+                                           "args": {"file_path": "src/a.py",
+                                                    "old_text": "alpha", "new_text": "gamma"}}]
+                else:
+                    content, calls = "", [{"name": "FileEditTool", "id": "bad-edit",
+                                           "args": {"file_path": "src/a.py",
+                                                    "old_text": "NOT PRESENT ANYWHERE", "new_text": "x"}}]
+            else:
+                content, calls = '{"passed": true, "reason": "ok", "checks": []}', []
+            return AIMessage(content=content, tool_calls=calls, usage_metadata={
+                "input_tokens": 3, "output_tokens": 2, "total_tokens": 5,
+            })
+
+    ctx = TaskRunContext.for_fake_model(
+        RetryEditModel(), max_provider_calls=20, max_total_tokens=500,
+        max_output_tokens_per_call=20,
+    )
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
+    projected = []
+    run_projected_workflow("repair", work, ctx, projected.append, max_attempts=1)
+    assert (work / "src" / "a.py").read_text(encoding="utf-8") == "gamma\nbeta\n"
+    assert [event for event in projected if event["kind"] == "tool_failure"] == []
+    statuses = [event["status"] for event in projected if event["kind"] == "tool_result"]
+    assert "failed" in statuses and "passed" in statuses
+
+
+def test_task_verifier_unknown_tool_returns_error_without_terminating(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    prepared = SimpleNamespace(task_id="task_1234567890123456", work=work,
+                               baseline=tmp_path / "baseline", root=tmp_path)
+    fs = TaskFilesystem(prepared, ("src/",), ("src/",), ".mokioclaw/task-scratch/")
+    runtime = RuntimeState(workspace=work, task_filesystem=fs, checkpoint_mode="off", trace_mode="off")
+    ctx = context(FakeModel("unused"))
+    services = TaskToolServices(fs)
+    ctx.attach_tools(fs, build_task_graph_tools(fs, None, work, services=services), services=services)
+    state = {"runtime": runtime, "task": "repair", "task_context": ctx}
+    emitted = []
+    message = nodes._execute_read_only_tool(
+        state, {"name": "FakeTool", "id": "f2", "args": {}}, writer=emitted.append)
+    assert "unknown tool: FakeTool" in str(message.content)
+    assert emitted == []
+
+
+def test_task_planner_unknown_tool_returns_error_without_terminating() -> None:
+    ctx = context(FakeModel("unused"))
+    state = {"task": "repair", "task_context": ctx,
+             "runtime": SimpleNamespace(task_filesystem=object(), allow_web_search=False)}
+    emitted = []
+    message = nodes._execute_planner_tool(
+        state, emitted.append, {"name": "FakeTool", "id": "f1", "args": {}})
+    assert "unknown tool: FakeTool" in str(message.content)
+    assert [event for event in emitted if event.get("type") == "task_tool_failure"] == []

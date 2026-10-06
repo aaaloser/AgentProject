@@ -1,5 +1,7 @@
 # MokioClaw 未执行 Task 的观测文件保留与接续设计
 
+> 2026-10-06 主线统一：用户已明确“现在合并吧”，本次将 codex/mokioclaw-stage-b 的已验收实现与历史合并到 main。后续开发使用 D:/MokioAgent/MokioAgent；本文件接纳实施树完整设计及增补，成为主目录当前阶段B设计，原“主项目设计较旧/只读实施树”分工按合并前历史读取。阶段B离线实现与N1–N4已接受，AF_PIPE/Tk/浏览器、旧持有者退出后的保留基线/加载绑定和真实启动/额度仍分别授权；合并不代表整个阶段B真实验收完成。旧阶段B工作树和分支暂保留，不操作其中可能在用的服务或无关文件，不使用子agent。
+
 > 2026-10-06 用户验收更新：用户明确将 N1–N4 原生合成文件门判通过，并授权提交、push最近未同步的阶段B相关实现、测试和交接文档；本轮分别同步既有 main 与 codex/mokioclaw-stage-b，不合并分支。旧“无提交/push”记载按各轮历史读取。下一项先制定并审阅全新合成临时根内、无provider/Docker/真实Agent的 AF_PIPE/Tk 长寿命、EOF/关闭和浏览器恢复验收计划，获批后执行；现有服务/原Task/旧观测文件的停止、保留基线与加载绑定，以及真实启动/新额度仍各自授权。私有运行资料、冻结证据和无关未跟踪文件不纳入同步。
 
 > 2026-10-06 当前：既有批准的 Windows 原生合成文件门 N1–N4 已完成，两个测试文件最终42 passed/0 skipped（8.08s），真实目录共享冲突32、junction、三旧文件holder、17绑定故障点和8关闭路径均有证据。相关324 passed/1 skipped（38.90s），全项目1310 passed/3 skipped/77 deselected/1 warning（190.66s），Ruff --no-cache通过。只S三份测试/合成child变更，产品源码保持；完整377映射见M的native-matrix-hashes.json，实际矩阵与失败历史见native-matrix.md。历史完整清单与native-acceptance.md均保留。现场服务/Task状态未核验，AF_PIPE/Tk/浏览器、正常退出后的旧文件保留基线/加载绑定、真实启动和额度仍分别授权；无provider/Docker/现场操作/提交/子agent，旧boltons余0、Task10第五批余2及停止讨论保持。下方旧“基础5项/原生未执行/矩阵待补”均按历史读取。
@@ -275,3 +277,15 @@ N1–N4沿既有批准完成，最终两个native测试文件42 passed/0 skipped
 本节是下一项范围指示，不是已批准的管道/窗口/浏览器实施计划。本轮只登记用户验收与同步资料、进行推送前离线检查和版本同步；没有开始下一项现场验收。
 
 本轮推送前独立复核：全项目离线1310 passed/3 skipped/77 deselected/1 warning（196.77s，exit0），原生合成42 passed/0 skipped（7.89s，exit0），Ruff --no-cache通过。全项目3 skip为既有symlink不可用，77排除为35 Docker+42另跑native，1 warning为既有Starlette/httpx弃用提示；原生本次JUnit默认xunit2带26个record_property兼容警告，测试仍通过，报告属性须按实际XML核对，不将警告记为无。377实现、21保护、7旧Task资产及7份既有ledger均无变化，两来源HEAD/status/index保持。有限凭据格式/冲突标记/文件大小检查覆盖M14与S61项；它不是完整秘密审计。未检查或操作当前现场服务/Task/旧观测。
+
+## 18. 2026-10-06 主线合并与后续入口
+
+用户明确“现在合并吧”，本轮将已推送的阶段B 824e372 合并到main起点42e9e31；这是已验收开发代码的整合，不把整个阶段B或真实维护能力记为通过。源码、测试、静态资源和pyproject与实施分支逐字节/完整Git差异核对一致，没有新增产品行为；阶段B设计两处冲突整合为实施树完整合同与原主目录两段说明的明确历史保留。
+
+后续开发入口统一为 D:/MokioAgent/MokioAgent。主目录阶段B设计接纳实施树全部增补，成为当前合同；旧“主目录设计较旧、只能以实施树为准”的分工按历史读取。已有阶段B工作树/分支暂保留，既有服务不会热加载本次合并，本轮不停止/重启/迁移它，不删两树无关文件或改原Task/来源/观测。以后经审阅的新现场命令应使用主目录源码；历史启动命令不在本轮执行。
+
+合并后M原清单的24项内容变化及43项新增（含原清单未覆盖的静态资源/JSON夹具和M的marker配置）是显式合并授权，不能继续将旧377映射记为当前M实现。新的独立 merge-source-test-hashes.json 覆盖M210+S210=420项；S实现保持，21保护/7旧Task资产保持，全部历史完整清单和原生覆盖ledger保留、不覆盖。私有运行资料和此映射保持ignored，不上传。
+
+下一项仍先审阅无provider的AF_PIPE/Tk与浏览器合成验收计划；随后现场正常停止旧持有者/保留基线/加载绑定、真实启动及新额度继续各自确认。合并和push不消费真实次数，不新增provider/Docker/Agent实验，不使用子agent。合并前实施树本轮1310 passed/3 skipped/77 deselected/1 warning（227.33s）；主目录合并后的新验证及最终Git结果另记本节，不借用实施树成绩。
+
+2026-10-06 主目录合并验收：在 D:/MokioAgent/MokioAgent 运行的新回归1310 passed/3 skipped/77 deselected/1 warning（213.95s，exit0），原生合成42 passed/0 skipped/0 warning（8.77s，exit0），Ruff --no-cache通过；实际模块来源已核对为主目录src。3 skip为既有symlink不可用，77为35 Docker+42另跑native，1 warning为既有Starlette/httpx弃用提示；本次native使用兼容record_property的JUnit xunit1，实际junction与共享冲突32属性保持，未宣称symlink创建能力通过。主目录代码/测试/pyproject与824e372完整一致，独立420项合并映射覆盖两树，历史清单保留。没有现场服务/原Task/旧观测操作或新真实调用。

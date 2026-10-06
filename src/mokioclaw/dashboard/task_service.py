@@ -8,11 +8,12 @@ import secrets
 import time
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from threading import RLock, Timer
 from types import SimpleNamespace
 from typing import Callable
+from typing import BinaryIO
 
 from mokioclaw.dashboard.catalog import RepositoryCatalog
 from mokioclaw.dashboard.task_approval import ApprovalBroker, ExecutionRequest
@@ -25,12 +26,16 @@ from mokioclaw.dashboard.task_result import (
     ResultSnapshotError, build_task_result, load_result_snapshot, save_result_snapshot,
 )
 from mokioclaw.dashboard.task_source import TaskSource
-from mokioclaw.dashboard.task_store import TaskConflict, TaskStore
+from mokioclaw.dashboard.task_store import TaskConflict, TaskStore, _digest
 from mokioclaw.dashboard.task_worker import TaskWorkerLauncher
 from mokioclaw.dashboard.task_worker_control import (
     DockerOwnershipCleanup, ProcessIdentity, TaskWorkerController,
 )
 from mokioclaw.providers.openai_provider import ProviderSettings
+
+# Preserve failed owners until process exit; GC must not unlock an unconfirmed
+# shutdown. These references never enter public events or responses.
+_retained_close_failures = []
 
 
 class InvalidTaskRequest(ValueError):
@@ -100,9 +105,9 @@ class FakeTaskRunner:
 
 
 class _TaskRootLease:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, stream: BinaryIO | None = None) -> None:
         self.path = root / ".dashboard.lock"
-        self.stream = self.path.open("a+b")
+        self.stream = stream if stream is not None else self.path.open("a+b")
         try:
             if os.name == "nt":
                 import msvcrt
@@ -155,30 +160,129 @@ class TaskService:
         self, catalog: RepositoryCatalog, reader: LocalGitReader, task_root: Path,
         *, fake_runner: FakeTaskRunner | None = None,
         worker_controller_factory: Callable[[TaskStore], TaskWorkerController] | None = None,
+        continuation_options=None, calibration_root: Path | None = None,
     ) -> None:
+        self._lock = RLock()
+        self._closing = self._close_failed = self._closed = False
+        self._continuation = None
+        self._uncommitted_journals = []
         self.catalog = catalog
         self.reader = reader
         self.task_root = _validate_task_root(Path(task_root), catalog)
-        self.task_root.mkdir(parents=True, exist_ok=True)
-        self.lease = _TaskRootLease(self.task_root)
+        initial_spec = None
+        if continuation_options is None:
+            self.task_root.mkdir(parents=True, exist_ok=True)
+            self.lease = _TaskRootLease(self.task_root)
+        else:
+            from mokioclaw.dashboard.task_observation_continuation import PrestartObservationContinuation, restore_continuation_catalog
+            if calibration_root is None:
+                raise ValueError("calibration_config_invalid")
+            self._continuation = PrestartObservationContinuation.open(continuation_options, calibration_root, self.task_root)
+            try:
+                stream = self._continuation.lease_stream()
+                self.lease = _TaskRootLease(self.task_root, stream=stream)
+                self._continuation.verify_lease(stream.fileno())
+                check = self._continuation.check(catalog, reader, cached_record=None)
+                try:
+                    self.store = TaskStore(self.task_root, verified_records=(check.record,))
+                    initial_spec = check.spec
+                    second = self._continuation.check(catalog, reader, cached_record=self.store.get(check.record.task_id))
+                    second.close()
+                    self.catalog = restore_continuation_catalog(catalog, check.spec, continuation_options.expected_source_root)
+                finally:
+                    check.close()
+            except Exception:
+                try:
+                    self._continuation.close()
+                    if self._continuation._lease_file is not None:
+                        for parent in reversed(self._continuation._lease_file.parents):
+                            parent.close()
+                    if hasattr(self, "lease"):
+                        self.lease.close()
+                    elif self._continuation._lease_file is not None:
+                        self._continuation._lease_file.close()
+                except Exception:
+                    self._close_failed = True
+                    _retained_close_failures.append(self)
+                raise ValueError("calibration_observation_invalid") from None
         try:
-            self.store = TaskStore(self.task_root)
+            if continuation_options is None:
+                self.store = TaskStore(self.task_root)
             self.worker_controller = worker_controller_factory(self.store) if worker_controller_factory else None
             if self.worker_controller is not None:
                 self.worker_controller.reconcile()
         except Exception:
+            if self._continuation is not None:
+                try:
+                    self._continuation.close()
+                    if self._continuation._lease_file is not None:
+                        for parent in reversed(self._continuation._lease_file.parents):
+                            parent.close()
+                    self.lease.close()
+                    self._continuation._lease_file.closed = True
+                except Exception:
+                    self._close_failed = True
+                    _retained_close_failures.append(self)
+                raise ValueError("calibration_observation_invalid") from None
             self.lease.close()
             raise
-        self.source = TaskSource(catalog, reader)
+        self.source = TaskSource(self.catalog, reader)
         self.prepare = prepare_task
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mokioclaw-prepare")
-        self._lock = RLock()
         self._prepared: dict[str, PreparedTask] = {}
         self._specs: dict[str, TaskSpec] = {}
+        if initial_spec is not None:
+            self._specs[initial_spec.task_id] = initial_spec
         self._approval_return_states: dict[tuple[str, str], str] = {}
         self.fake_runner = fake_runner
         self.task_image_digest: str | None = None
         self.task_model_name: str | None = None
+        self.observation_manager = None
+
+    def configure_calibration(self, root: Path, *, manager_factory=None):
+        """Opt in after store construction, before configuring Agent capability."""
+        from mokioclaw.dashboard.task_diagnostics import CalibrationObservationManager, _safe_path
+        with self._lock:
+            if (self.observation_manager is not None
+                    or _safe_path(self.task_root).resolve() != (_safe_path(root) / "tasks").resolve()):
+                raise ValueError("calibration_config_invalid")
+            factory = manager_factory or CalibrationObservationManager
+            if self._continuation is None:
+                manager = factory(Path(root), task_lookup=self.store.get)
+            else:
+                if Path(root).absolute() != self._continuation.root:
+                    raise ValueError("calibration_config_invalid")
+                manager = factory(Path(root), task_lookup=self.store.get,
+                                  continuation_task_id=self._continuation.options.task_id,
+                                  viewer_handler=lambda frame: self.receive_calibration_viewer(manager, frame))
+            self.observation_manager = manager
+            return manager
+
+    def receive_calibration_viewer(self, manager, frame):
+        from mokioclaw.dashboard.task_diagnostics import NumericJournal
+        with self._lock:
+            if manager is not self.observation_manager or self._closing:
+                raise ValueError("calibration_observation_invalid")
+            if self._continuation is None or frame.get("kind") != "bind":
+                return manager.receive_viewer(frame)
+            reservation = manager.reserve_continuation_bind(frame)
+            journal = None
+            check = None
+            try:
+                check = self._continuation.check(self.catalog, self.reader, cached_record=self.store.get(reservation.task_id))
+                session = self._continuation.create_session(check)
+                journal = NumericJournal(self._continuation.root, reservation.task_id, session=session)
+                check.close()
+                return manager.commit_continuation_bind(reservation, session, journal)
+            except Exception:
+                manager.invalidate()
+                if journal is not None:
+                    self._uncommitted_journals.append(journal)
+                    journal.seal_and_close()
+                return manager._viewer_state(reservation.sequence, False)
+            finally:
+                if check is not None and not check.closed and not check.close_failed:
+                    check.close()
 
     def configure_agent(self, provider_settings: ProviderSettings, image_digest: str) -> None:
         """Install the task capability without starting a worker, container, or model."""
@@ -191,7 +295,11 @@ class TaskService:
                 raise TaskConflict("Task worker is already configured")
             controller = TaskWorkerController(
                 store=self.store,
-                launcher=TaskWorkerLauncher(provider_settings, start_payload=self.worker_start_payload),
+                launcher=TaskWorkerLauncher(
+                    provider_settings, start_payload=self.worker_start_payload,
+                    **({"diagnostic_bootstrap": self.observation_manager.worker_bootstrap}
+                       if self.observation_manager is not None else {}),
+                ),
                 containers=DockerOwnershipCleanup(),
                 broker=ApprovalBroker(on_request=self._on_approval_request),
             )
@@ -317,7 +425,53 @@ class TaskService:
             return result
 
     def close(self) -> None:
+        if getattr(self, "_continuation", None) is not None:
+            with self._lock:
+                if self._closed:
+                    return
+                if self._closing or self._close_failed:
+                    raise ValueError("calibration_observation_invalid")
+                self._closing = True
+            try:
+                with self._lock:
+                    if self.observation_manager is not None:
+                        result = self.observation_manager.close_confirmed()
+                        if not result.confirmed:
+                            raise ValueError("calibration_observation_invalid")
+                    for journal in self._uncommitted_journals:
+                        journal.seal_and_close()
+                    session = self._continuation.session
+                    if session is not None and hasattr(session, "failed_journal"):
+                        session.failed_journal.seal_and_close()
+                    if self.worker_controller is not None:
+                        self.worker_controller.reconcile()
+                # Pool callbacks may be waiting for service._lock. Closing state
+                # keeps new binds/starts blocked while the pool drains.
+                self.pool.shutdown(wait=True, cancel_futures=False)
+                with self._lock:
+                    self._continuation.verify_preserved()
+                    if self._continuation.cleanup_failed:
+                        raise ValueError("calibration_observation_invalid")
+                    if session is not None:
+                        if session._transferred:
+                            session.verify_layout()
+                        session.close()
+                    self._continuation.close()
+                    if self._continuation._lease_file is not None:
+                        for parent in reversed(self._continuation._lease_file.parents):
+                            parent.close()
+                    self.lease.close()
+                    if self._continuation._lease_file is not None:
+                        self._continuation._lease_file.closed = True
+                    self._closed = True
+                return
+            except Exception:
+                self._close_failed = True
+                _retained_close_failures.append(self)
+                raise ValueError("calibration_observation_invalid") from None
         try:
+            if self.observation_manager is not None:
+                self.observation_manager.close()
             if self.worker_controller is not None:
                 self.worker_controller.reconcile()
         finally:
@@ -351,8 +505,8 @@ class TaskService:
             source_write_scope=preview.source_write_scope, task_scratch_scope=preview.task_scratch_scope,
             manifest_digest=preview.manifest_digest, max_seconds=_integer(payload, "max_seconds", 1, 1800),
             max_attempts=_integer(payload, "max_attempts", 1, 3), verification_commands=tuple(commands),
-            max_provider_calls=_integer(payload, "max_provider_calls", 1, 20),
-            max_total_tokens=_integer(payload, "max_total_tokens", 1, 100_000),
+            max_provider_calls=_integer(payload, "max_provider_calls", 1, 24),
+            max_total_tokens=_integer(payload, "max_total_tokens", 1, 300_000),
             max_output_tokens_per_call=_integer(payload, "max_output_tokens_per_call", 1, 4096), created_at="",
         )
         with self._lock:
@@ -482,6 +636,12 @@ class TaskService:
     def start_agent(self, task_id: str) -> TaskRecord:
         """Start one prepared task only while the fixed local image is available."""
         with self._lock:
+            if getattr(self, "_closing", False):
+                raise TaskConflict("calibration_observation_invalid")
+            if self.observation_manager is not None and not self.observation_manager.ready_for_start(task_id):
+                raise TaskConflict("calibration_observation_invalid")
+            if getattr(self, "_continuation", None) is not None:
+                self._continuation_start_check(task_id)
             controller = self.worker_controller
             image = self.task_image_digest
             if controller is None or image is None or controller.broker is None:
@@ -489,7 +649,16 @@ class TaskService:
             if not self.run_available():
                 raise TaskConflict("Fixed task image is unavailable")
             self._fixed_spec(task_id)
-            record = controller.start(task_id)
+            if getattr(self, "_continuation", None) is not None:
+                generation = self._continuation_start_check(task_id)
+                manager = self.observation_manager
+                with manager._lock:
+                    if manager._generation != generation or not manager.ready_for_start(task_id):
+                        manager.invalidate()
+                        raise TaskConflict("calibration_observation_invalid")
+                    record = controller.start(task_id)
+            else:
+                record = controller.start(task_id)
             work = self.store.root / task_id / "workspace" / "work"
             try:
                 executor = IsolatedCommandExecutor(
@@ -507,6 +676,33 @@ class TaskService:
                 controller.finish(task_id, "failed", "worker_start_failed")
                 raise TaskConflict("Task worker could not start") from exc
             return record
+
+    def _continuation_start_check(self, task_id):
+        manager = self.observation_manager
+        check = None
+        try:
+            if (manager is None or not manager.ready_for_start(task_id) or manager.session is not self._continuation.session
+                    or manager.journal is None or not manager.journal.is_initial()):
+                raise ValueError("calibration_observation_invalid")
+            with manager._lock:
+                generation = manager._generation
+            self._continuation.verify_lease(self.lease.stream.fileno())
+            check = self._continuation.check(self.catalog, self.reader, cached_record=self.store.get(task_id), session=manager.session)
+            cached_spec = self._specs.get(task_id)
+            if type(cached_spec) is not TaskSpec or _digest(asdict(cached_spec)) != _digest(asdict(check.spec)):
+                raise ValueError("calibration_observation_invalid")
+            with manager._lock:
+                if manager._generation != generation or not manager.ready_for_start(task_id) or not manager.journal.is_initial():
+                    raise ValueError("calibration_observation_invalid")
+            check.close()
+            return generation
+        except Exception:
+            if manager is not None:
+                manager.invalidate()
+            raise TaskConflict("calibration_observation_invalid") from None
+        finally:
+            if check is not None and not check.closed and not check.close_failed:
+                check.close()
 
     def follow_worker(self, task_id: str, gateway) -> TaskRecord:
         controller = self.worker_controller

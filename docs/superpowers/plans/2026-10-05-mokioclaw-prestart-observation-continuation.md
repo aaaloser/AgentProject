@@ -1,5 +1,7 @@
 # MokioClaw 未执行 Task 观测接续 Implementation Plan
 
+> 2026-10-06 主线统一：用户已明确“现在合并吧”，本次将 codex/mokioclaw-stage-b 的已验收实现与历史合并到 main。后续开发使用 D:/MokioAgent/MokioAgent；本文件接纳实施树完整设计及增补，成为主目录当前阶段B设计，原“主项目设计较旧/只读实施树”分工按合并前历史读取。阶段B离线实现与N1–N4已接受，AF_PIPE/Tk/浏览器、旧持有者退出后的保留基线/加载绑定和真实启动/额度仍分别授权；合并不代表整个阶段B真实验收完成。旧阶段B工作树和分支暂保留，不操作其中可能在用的服务或无关文件，不使用子agent。
+
 > 2026-10-06 用户验收更新：用户明确将 N1–N4 原生合成文件门判通过，并授权提交、push最近未同步的阶段B相关实现、测试和交接文档；本轮分别同步既有 main 与 codex/mokioclaw-stage-b，不合并分支。旧“无提交/push”记载按各轮历史读取。下一项先制定并审阅全新合成临时根内、无provider/Docker/真实Agent的 AF_PIPE/Tk 长寿命、EOF/关闭和浏览器恢复验收计划，获批后执行；现有服务/原Task/旧观测文件的停止、保留基线与加载绑定，以及真实启动/新额度仍各自授权。私有运行资料、冻结证据和无关未跟踪文件不纳入同步。
 
 > 2026-10-06 当前：既有批准的 Windows 原生合成文件门 N1–N4 已完成，两个测试文件最终42 passed/0 skipped（8.08s），真实目录共享冲突32、junction、三旧文件holder、17绑定故障点和8关闭路径均有证据。相关324 passed/1 skipped（38.90s），全项目1310 passed/3 skipped/77 deselected/1 warning（190.66s），Ruff --no-cache通过。只S三份测试/合成child变更，产品源码保持；完整377映射见M的native-matrix-hashes.json，实际矩阵与失败历史见native-matrix.md。历史完整清单与native-acceptance.md均保留。现场服务/Task状态未核验，AF_PIPE/Tk/浏览器、正常退出后的旧文件保留基线/加载绑定、真实启动和额度仍分别授权；无provider/Docker/现场操作/提交/子agent，旧boltons余0、Task10第五批余2及停止讨论保持。下方旧“基础5项/原生未执行/矩阵待补”均按历史读取。

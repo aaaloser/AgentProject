@@ -92,6 +92,22 @@ def test_completed_without_approved_evidence_is_not_verification_pass(tmp_path: 
     assert "verification_evidence_incomplete" in result.limitations
 
 
+def test_prior_verification_evidence_survives_next_attempt_context_stop(tmp_path: Path) -> None:
+    prepared = _prepared(tmp_path)
+    events = (
+        _event(1, "approval_request", {"status": "waiting", "request_id": REQUEST, "execution_digest": DIGEST}),
+        _event(2, "approval_decision", {"decision": "approved", "request_id": REQUEST}),
+        _event(3, "verification", {"status": "failed", "exit_code": 1, "duration_ms": 41,
+                                    "command_index": 0, "request_id": REQUEST}),
+    )
+    result = build_task_result(_record("failed", events, failure="task_context_error", attempt=2,
+                                      receipts=(_receipt(exit_code=1, ok=False),)), _spec(), prepared)
+    assert result.failure_kind == "task_context_error" and result.verification_status == "not_run"
+    prior = [check for check in result.verification_results if check.attempt_id == 1]
+    assert len(prior) == 1 and prior[0].status == "failed"
+    assert prior[0].exit_code == 1 and prior[0].command_request_id == REQUEST
+
+
 def test_approved_event_without_parent_execution_receipt_is_not_a_pass(tmp_path: Path) -> None:
     prepared = _prepared(tmp_path)
     events = (

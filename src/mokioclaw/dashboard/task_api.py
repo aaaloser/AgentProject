@@ -188,6 +188,12 @@ def install_task_routes(app: FastAPI, service: TaskService | None, csrf_token: s
             return task_error(404, "task_not_found", "The task is unavailable.")
         if available().store.has_active_task(exclude_task_id=task_id):
             return task_error(409, "task_busy", "Another task is active; try again later.", True)
+        if getattr(available(), "_continuation", None) is not None:
+            try:
+                with available()._lock:
+                    available()._continuation_start_check(task_id)
+            except TaskConflict:
+                return task_error(409, "task_conflict", "The task cannot start now.")
         if not available().run_available():
             return task_error(503, "run_unavailable", "Agent execution is not ready.")
         try:

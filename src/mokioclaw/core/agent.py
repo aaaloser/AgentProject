@@ -22,9 +22,17 @@ from mokioclaw.core.session import (
     session_turn_started_event,
 )
 from mokioclaw.core.state import RuntimeState
+from mokioclaw.core.task_closeout import TaskCloseout, CloseoutMode, CloseoutPurpose, TaskCloseoutError
+from mokioclaw.core.task_observation import (
+    TaskObservation, ObservationRecord, LedgerNumbers, normalize_usage,
+)
 from mokioclaw.core.trace import TraceRecorder, normalize_trace_mode
 from mokioclaw.graph.workflow import build_complex_workflow, build_entry_workflow
 from mokioclaw.dashboard.task_executor import TaskExecutionError
+from mokioclaw.dashboard.task_context import (
+    TaskToolServices, TaskContextError, RequestBinding, request_binding, measure_request,
+    validate_groups, tool_message_size, baseline_messages, POLICY,
+)
 from mokioclaw.providers.openai_provider import (
     ProviderSettings, TaskProviderError, create_task_model, task_provider_failure_kind,
 )
@@ -33,34 +41,116 @@ from mokioclaw.providers.openai_provider import (
 _TASK_MODEL_STAGES = (
     "entry", "chat", "planner", "code_agent", "verifier", "context_compressor",
 )
+_PROVIDER_ROOTS = frozenset({"provider_failed", "provider_auth_failed", "provider_rate_limited",
+                           "provider_invalid_request", "provider_transport_failed", "provider_server_failed",
+                           "usage_unavailable", "provider_budget_exhausted"})
+_TERMINAL_ROOTS = _PROVIDER_ROOTS | {"task_tool_failed", "verification_command_failed", "task_closeout_incomplete"}
 
 
 class _TaskModel:
-    def __init__(self, underlying: Any, context: TaskRunContext, stage: str) -> None:
+    def __init__(self, underlying: Any, context: TaskRunContext, stage: str,
+                 purpose: CloseoutPurpose | None = None) -> None:
         self._underlying = underlying
         self._context = context
         self._stage = stage
+        self._purpose = purpose
+        self._binding: RequestBinding | None = None
+        self._delegation: tuple | None = None
 
     def bind_tools(self, tools: Any, **kwargs: Any) -> _TaskModel:
         try:
-            return _TaskModel(self._underlying.bind_tools(tools, **kwargs), self._context, self._stage)
+            bound = self._underlying.bind_tools(tools, **kwargs)
         except Exception:
+            self._context.record_terminal_root("provider_failed")
             raise TaskProviderError("provider_setup_failed") from None
+        result = _TaskModel(bound, self._context, self._stage, self._purpose)
+        if self._stage == "code_agent" and self._context.task_filesystem is not None:
+            result._binding = request_binding(tools, **kwargs)
+            session = self._context.task_services.session if self._context.task_services is not None else None
+            if session is None:
+                raise TaskContextError("invalid_message_group")
+            result._delegation = session.identity
+        return result
+
+    def for_purpose(self, purpose: CloseoutPurpose) -> _TaskModel:
+        result = _TaskModel(self._underlying, self._context, self._stage, purpose)
+        result._binding = self._binding
+        result._delegation = self._delegation
+        return result
 
     def invoke(self, messages: Any, **kwargs: Any) -> Any:
         context = self._context
+        if context.observation is None:
+            return self._invoke(messages, **kwargs)
         with context._lock:
-            if context._usage_unavailable:
-                raise TaskProviderError("usage_unavailable")
-            if (context.provider_calls >= context.max_provider_calls
-                    or context.reported_tokens >= context.max_total_tokens):
-                raise TaskProviderError("provider_budget_exhausted")
+            initial_calls = context.provider_calls
+            self._gate = "known_failure"
+            try:
+                return self._invoke(messages, **kwargs)
+            except Exception:
+                if context.provider_calls == initial_calls:
+                    context._observe("invoke_refused", stage=self._stage,
+                                     purpose=self._purpose, status="refused", gate=self._gate,
+                                     before=context._ledger(), after=context._ledger())
+                raise
+
+    def _invoke(self, messages: Any, **kwargs: Any) -> Any:
+        context = self._context
+        with context._lock:
+            context.check_known_failure()
+            self._gate = ("usage" if context.usage_unavailable else
+                          "total_calls" if context.provider_calls >= context.max_provider_calls else "total_tokens")
+            context.preflight_provider_budget()
+            self._gate = "context"
+            if self._stage == "code_agent" and context.task_filesystem is not None:
+                session = context.task_services.session if context.task_services is not None else None
+                if (session is None or session.closed or session.identity != self._delegation
+                        or self._binding is None or self._binding != session.binding):
+                    raise TaskContextError("invalid_message_group")
+                if list(messages[:len(session.anchors)]) != list(session.anchors):
+                    raise TaskContextError("invalid_message_group")
+                if measure_request(baseline_messages(session.anchors, session._state([])), self._binding,
+                                   invocation_options=kwargs) >= POLICY.target:
+                    raise TaskContextError("input_too_large")
+                index = len(session.anchors)
+                if (len(messages) <= index or getattr(messages[index], "name", None) != "task_context_index"):
+                    raise TaskContextError("invalid_message_group")
+                groups = validate_groups(list(messages[index + 1:]))
+                if any(any(tool_message_size(t) > POLICY.tool_json for t in g.tools)
+                       or sum(tool_message_size(t) for t in g.tools) > POLICY.group_json for g in groups):
+                    raise TaskContextError("input_too_large")
+                if measure_request(list(messages), self._binding, invocation_options=kwargs) > POLICY.hard:
+                    raise TaskContextError("input_too_large")
+            allowed = {
+                "code_agent": {CloseoutPurpose.REPAIR, CloseoutPurpose.HANDOFF},
+                "planner": {CloseoutPurpose.PLANNER}, "verifier": {CloseoutPurpose.VERIFIER},
+                "context_compressor": {CloseoutPurpose.PRE_COMPRESS, CloseoutPurpose.POST_COMPRESS},
+            }
+            if self._purpose is not None and self._purpose not in allowed.get(self._stage, set()):
+                raise ValueError("task_model_purpose_invalid")
+            if context.closeout.mode != CloseoutMode.INACTIVE:
+                self._gate = "phase"
+                if self._purpose is None:
+                    if context.closeout.mode != CloseoutMode.REPAIR or self._stage != "planner":
+                        raise TaskCloseoutError("phase_limit")
+                else:
+                    context.closeout.claim_invoke(self._purpose)
+            before = context._ledger() if context.observation is not None else None
             context.provider_calls += 1
             context._stage_calls[self._stage] += 1
+            call_no = context.provider_calls
+            context._observe("invoke_started", stage=self._stage, purpose=self._purpose,
+                             call_no=call_no, status="started",
+                             before=before, after=context._ledger() if before is not None else None)
             try:
                 response = self._underlying.invoke(messages, **kwargs)
             except Exception as exc:
-                raise TaskProviderError(task_provider_failure_kind(exc)) from None
+                kind = task_provider_failure_kind(exc)
+                context.record_terminal_root(kind if kind in _PROVIDER_ROOTS else "provider_failed")
+                context._observe("invoke_failed", stage=self._stage, purpose=self._purpose,
+                                 call_no=call_no, status="provider_failed",
+                                 before=before, after=context._ledger() if before is not None else None)
+                raise TaskProviderError(kind) from None
             usage = getattr(response, "usage_metadata", None)
             total = usage.get("total_tokens") if isinstance(usage, dict) else None
             if not isinstance(total, int) or isinstance(total, bool) or total < 0:
@@ -68,6 +158,15 @@ class _TaskModel:
             else:
                 context.reported_tokens += total
                 context._stage_tokens[self._stage] += total
+                context.closeout.record_usage(self._purpose, total)
+            numbers = normalize_usage(usage) if context.observation is not None else None
+            if numbers is not None:
+                context._observe("invoke_finished", stage=self._stage, purpose=self._purpose,
+                                 call_no=call_no,
+                                 status="usage_unavailable" if numbers.total_tokens is None else "valid_usage",
+                                 total_tokens=numbers.total_tokens, input_tokens=numbers.input_tokens,
+                                 output_tokens=numbers.output_tokens, split_status=numbers.split_status,
+                                 before=before, after=context._ledger())
             return response
 
 
@@ -85,8 +184,9 @@ class TaskRunContext:
         max_provider_calls: int,
         max_total_tokens: int,
         max_output_tokens_per_call: int,
+        observation: TaskObservation | None = None,
     ) -> None:
-        if (not 1 <= max_provider_calls <= 20 or not 1 <= max_total_tokens <= 100_000
+        if (not 1 <= max_provider_calls <= 24 or not 1 <= max_total_tokens <= 300_000
                 or not 1 <= max_output_tokens_per_call <= 4096):
             raise TaskProviderError("invalid_provider_budget")
         self._model_factory = model_factory
@@ -103,18 +203,106 @@ class TaskRunContext:
         self.task_filesystem: Any | None = None
         self.task_tools: list[Any] | None = None
         self.task_gateway: Any | None = None
+        self.task_services: TaskToolServices | None = None
         self.current_attempt = 1
         self.fixed_verification_commands: tuple[str, ...] = ()
+        self._terminal_root: str | None = None
+        self.observation = observation
+        self.closeout = TaskCloseout(max_output_tokens_per_call,
+                                    observer=self._observe_closeout if observation is not None else None)
+
+    def _ledger(self) -> LedgerNumbers:
+        return LedgerNumbers(self.provider_calls, self.reported_tokens,
+                             max(0, self.max_provider_calls - self.provider_calls),
+                             self.max_total_tokens - self.reported_tokens)
+
+    def _observe(self, kind, *, purpose=None, **values) -> None:
+        if self.observation is None:
+            return
+        try:
+            self.observation.emit(ObservationRecord(
+                task_id=self.observation.task_id, attempt_id=self.current_attempt,
+                kind=kind, purpose=purpose.value if isinstance(purpose, CloseoutPurpose) else purpose,
+                **values,
+            ))
+        except Exception:
+            self.observation.invalidate()
+
+    def _observe_closeout(self, notice) -> None:
+        with self._lock:
+            snapshot = notice.snapshot
+            self._observe(notice.kind, purpose=notice.purpose, call_no=notice.call_no,
+                          gate=notice.gate, reasons=notice.reasons,
+                          before=self._ledger(), after=self._ledger(),
+                          policy={"mode": snapshot.mode, "E_repair": snapshot.E_repair,
+                                  "R_calls": snapshot.R_calls, "R_tokens": snapshot.R_tokens,
+                                  "iterations_left": snapshot.iterations_left, "slots": dict(snapshot.slots)})
+
+    def check_known_failure(self) -> None:
+        with self._lock:
+            if self._terminal_root in _PROVIDER_ROOTS:
+                raise TaskProviderError(self._terminal_root)
+            if self._terminal_root in {"task_tool_failed", "verification_command_failed"}:
+                raise TaskExecutionError(self._terminal_root)
+            if self._terminal_root == "task_closeout_incomplete":
+                raise TaskCloseoutError("phase_limit")
+            if self._usage_unavailable:
+                self.record_terminal_root("usage_unavailable")
+                raise TaskProviderError("usage_unavailable")
+
+    def resolve_closeout_failure(self, error: TaskCloseoutError) -> str:
+        if not isinstance(error, TaskCloseoutError):
+            raise ValueError("task_closeout_failure_invalid")
+        with self._lock:
+            if self._terminal_root is not None:
+                return self._terminal_root
+            if self._usage_unavailable:
+                return "usage_unavailable"
+            if self.provider_calls >= self.max_provider_calls or self.reported_tokens >= self.max_total_tokens:
+                return "provider_budget_exhausted"
+            return "task_closeout_incomplete"
+
+    def record_terminal_root(self, kind: str) -> None:
+        if kind not in _TERMINAL_ROOTS:
+            raise ValueError("task_terminal_root_invalid")
+        with self._lock:
+            if self._terminal_root is None:
+                self._terminal_root = kind
+
+    def resolve_context_failure(self, error: TaskContextError) -> str:
+        if not isinstance(error, TaskContextError):
+            raise ValueError("task_context_failure_invalid")
+        with self._lock:
+            if self._terminal_root is not None:
+                return self._terminal_root
+            if self._usage_unavailable:
+                return "usage_unavailable"
+            if self.provider_calls >= self.max_provider_calls or self.reported_tokens >= self.max_total_tokens:
+                return "provider_budget_exhausted"
+            return "task_context_error"
+
+    def preflight_provider_budget(self) -> None:
+        with self._lock:
+            if self._usage_unavailable:
+                self.record_terminal_root("usage_unavailable")
+                raise TaskProviderError("usage_unavailable")
+            if (self.provider_calls >= self.max_provider_calls or self.reported_tokens >= self.max_total_tokens):
+                self.record_terminal_root("provider_budget_exhausted")
+                raise TaskProviderError("provider_budget_exhausted")
 
     def attach_tools(
-        self, filesystem: Any, tools: list[Any], *, gateway: Any | None = None,
+        self, filesystem: Any, tools: list[Any], *, services: TaskToolServices, gateway: Any | None = None,
         verification_commands: tuple[str, ...] = (),
     ) -> None:
         if self.task_filesystem is not None or not tools:
             raise ValueError("task_tools_already_configured")
+        if services.filesystem is not filesystem:
+            raise TaskContextError("invalid_message_group")
         if any(not isinstance(command, str) or not command.strip() for command in verification_commands):
             raise ValueError("task_verification_invalid")
         self.task_filesystem = filesystem
+        self.task_services = services
+        services.terminal_recorder = self.record_terminal_root
         self.task_tools = list(tools)
         self.task_gateway = gateway
         self.fixed_verification_commands = tuple(verification_commands)
@@ -122,14 +310,20 @@ class TaskRunContext:
     def begin_attempt(self, attempt_id: int) -> None:
         with self._lock:
             if attempt_id == self.current_attempt:
+                self.closeout.begin_attempt(attempt_id)
                 return
             if attempt_id != self.current_attempt + 1 or self.task_gateway is None:
                 raise TaskExecutionError("task_attempt_invalid")
+            if self.closeout.mode == CloseoutMode.INACTIVE:
+                self.closeout.begin_attempt(self.current_attempt)
             try:
                 self.task_gateway.set_attempt(attempt_id)
             except Exception:
                 raise TaskExecutionError("task_attempt_invalid") from None
             self.current_attempt = attempt_id
+            self.closeout.begin_attempt(attempt_id)
+            if self.task_services is not None:
+                self.task_services.close_delegation()
 
     @classmethod
     def from_settings(
@@ -139,12 +333,14 @@ class TaskRunContext:
         max_provider_calls: int,
         max_total_tokens: int,
         max_output_tokens_per_call: int,
+        observation: TaskObservation | None = None,
     ) -> TaskRunContext:
         return cls(
             lambda: create_task_model(settings, max_output_tokens=max_output_tokens_per_call),
             max_provider_calls=max_provider_calls,
             max_total_tokens=max_total_tokens,
             max_output_tokens_per_call=max_output_tokens_per_call,
+            observation=observation,
         )
 
     @classmethod
@@ -155,15 +351,17 @@ class TaskRunContext:
         max_provider_calls: int,
         max_total_tokens: int,
         max_output_tokens_per_call: int,
+        observation: TaskObservation | None = None,
     ) -> TaskRunContext:
         return cls(
             lambda: model,
             max_provider_calls=max_provider_calls,
             max_total_tokens=max_total_tokens,
             max_output_tokens_per_call=max_output_tokens_per_call,
+            observation=observation,
         )
 
-    def model(self, *, stage: str) -> _TaskModel:
+    def model(self, *, stage: str, purpose: CloseoutPurpose | None = None) -> _TaskModel:
         if stage not in _TASK_MODEL_STAGES:
             raise ValueError("task_model_stage_invalid")
         with self._lock:
@@ -171,10 +369,12 @@ class TaskRunContext:
                 try:
                     self._model = self._model_factory()
                 except TaskProviderError:
+                    self.record_terminal_root("provider_failed")
                     raise
                 except Exception:
+                    self.record_terminal_root("provider_failed")
                     raise TaskProviderError("provider_setup_failed") from None
-            return _TaskModel(self._model, self, stage)
+            return _TaskModel(self._model, self, stage, purpose)
 
     def usage_snapshot(self) -> dict[str, int]:
         with self._lock:

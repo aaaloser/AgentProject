@@ -163,12 +163,25 @@ def dashboard(
     task_root: Annotated[Path | None, typer.Option("--task-root", help="Store isolated local task copies here.")] = None,
     task_image: Annotated[str | None, typer.Option("--task-image", help="Fixed local Docker image digest for explicitly enabled Agent tasks.")] = None,
     enable_agent: Annotated[bool, typer.Option("--enable-agent", help="Enable individually confirmed local Agent tasks.")] = False,
+    calibration_root: Annotated[Path | None, typer.Option("--calibration-root", help="Enable a private native calibration viewer for one bound task.")] = None,
+    calibration_continue_task: Annotated[str | None, typer.Option("--calibration-continue-task", help="Continue observations for this never-executed task.")] = None,
+    calibration_expected_spec_sha256: Annotated[str | None, typer.Option("--calibration-expected-spec-sha256", help="Expected SHA256 of the preserved task specification.")] = None,
+    calibration_expected_source_root: Annotated[Path | None, typer.Option("--calibration-expected-source-root", help="Expected absolute source repository root.")] = None,
 ) -> None:
     """Browse commits and review priority for explicitly selected local Git repositories."""
     from mokioclaw.dashboard.catalog import CatalogRegistrationError
     from mokioclaw.dashboard.launcher import launch_dashboard
 
     try:
+        from mokioclaw.dashboard.task_observation_continuation import parse_continuation_options
+        continuation = parse_continuation_options(
+            task_id=calibration_continue_task, expected_spec_sha256=calibration_expected_spec_sha256,
+            expected_source_root=calibration_expected_source_root, calibration_root=calibration_root,
+            task_root=task_root, enable_agent=enable_agent, task_image=task_image, repo_paths=repos or [],
+        )
+        if calibration_root is not None and not enable_agent:
+            safe_secho("--calibration-root requires --enable-agent.", fg=typer.colors.RED)
+            raise typer.Exit(2)
         if enable_agent and (task_root is None or task_image is None
                              or re.fullmatch(r"sha256:[0-9a-f]{64}", task_image) is None):
             safe_secho("Agent mode requires --task-root and a valid --task-image digest.", fg=typer.colors.RED)
@@ -180,9 +193,21 @@ def dashboard(
             launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser)
         elif enable_agent:
             launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser,
-                             task_root=task_root, task_image=task_image, enable_agent=True)
+                             task_root=task_root, task_image=task_image, enable_agent=True,
+                             **({"calibration_root": calibration_root} if calibration_root is not None else {}),
+                             **({"calibration_continue_task": calibration_continue_task,
+                                 "calibration_expected_spec_sha256": calibration_expected_spec_sha256,
+                                 "calibration_expected_source_root": calibration_expected_source_root}
+                                if continuation is not None else {}))
         else:
             launch_dashboard(repos or [Path.cwd()], open_browser=not no_browser, task_root=task_root)
+    except ValueError as exc:
+        if calibration_root is None and all(value is None for value in (
+                calibration_continue_task, calibration_expected_spec_sha256, calibration_expected_source_root)):
+            raise
+        code = str(exc) if str(exc) in {"calibration_config_invalid", "calibration_observation_invalid"} else "calibration_observation_invalid"
+        safe_secho(code, fg=typer.colors.RED)
+        raise typer.Exit(2) from None
     except CatalogRegistrationError as exc:
         guidance = (
             "Git executable is unavailable. Install Git or add it to PATH."
