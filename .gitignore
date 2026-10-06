@@ -20,6 +20,7 @@ docs/*
 !docs/MOKIOCLAW_NEXT_SESSION_HANDOFF_2026-09-28.md
 !docs/MOKIOCLAW_NEXT_SESSION_HANDOFF_2026-09-29.md
 !docs/MOKIOCLAW_CURRENT_BOTTLENECKS_2026-09-30.md
+!docs/MOKIOCLAW_NEXT_SESSION_BRIEF_2026-10-04.md
 !docs/task10_grep_symlink_candidate.patch
 !docs/superpowers/
 docs/superpowers/*
@@ -27,9 +28,18 @@ docs/superpowers/*
 docs/superpowers/specs/*
 !docs/superpowers/specs/2026-09-26-mokioclaw-local-repository-review-dashboard-design.md
 !docs/superpowers/specs/2026-09-28-mokioclaw-local-codeagent-dashboard-design.md
+!docs/superpowers/specs/2026-10-04-mokioclaw-task-codeagent-context-design.md
+!docs/superpowers/specs/2026-10-04-mokioclaw-task-closeout-reserve-design.md
+!docs/superpowers/specs/2026-10-04-mokioclaw-real-calibration-design.md
+!docs/superpowers/specs/2026-10-05-mokioclaw-prestart-observation-continuation-design.md
 !docs/superpowers/plans/
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-09-26-mokioclaw-local-repository-review-dashboard.md
 !docs/superpowers/plans/2026-09-28-mokioclaw-local-codeagent-dashboard.md
+!docs/superpowers/plans/2026-10-04-mokioclaw-task-codeagent-context.md
+!docs/superpowers/plans/2026-10-04-mokioclaw-task-closeout-reserve.md
+!docs/superpowers/plans/2026-10-04-mokioclaw-private-calibration-observation.md
+!docs/superpowers/plans/2026-10-05-mokioclaw-viewer-binding-fix.md
+!docs/superpowers/plans/2026-10-05-mokioclaw-prestart-observation-continuation.md
 
 # *.md

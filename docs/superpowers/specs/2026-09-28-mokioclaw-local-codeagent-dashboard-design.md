@@ -1,5 +1,31 @@
 # MokioClaw 本地工作台 CodeAgent 接入设计（阶段 B）
 
+> 2026-10-06 用户验收更新：用户明确将 N1–N4 原生合成文件门判通过，并授权提交、push最近未同步的阶段B相关实现、测试和交接文档；本轮分别同步既有 main 与 codex/mokioclaw-stage-b，不合并分支。旧“无提交/push”记载按各轮历史读取。下一项先制定并审阅全新合成临时根内、无provider/Docker/真实Agent的 AF_PIPE/Tk 长寿命、EOF/关闭和浏览器恢复验收计划，获批后执行；现有服务/原Task/旧观测文件的停止、保留基线与加载绑定，以及真实启动/新额度仍各自授权。私有运行资料、冻结证据和无关未跟踪文件不纳入同步。
+
+> 2026-10-06 当前：既有批准的 Windows 原生合成文件门 N1–N4 已完成，两个测试文件最终42 passed/0 skipped（8.08s），真实目录共享冲突32、junction、三旧文件holder、17绑定故障点和8关闭路径均有证据。相关324 passed/1 skipped（38.90s），全项目1310 passed/3 skipped/77 deselected/1 warning（190.66s），Ruff --no-cache通过。只S三份测试/合成child变更，产品源码保持；完整377映射见M的native-matrix-hashes.json，实际矩阵与失败历史见native-matrix.md。历史完整清单与native-acceptance.md均保留。现场服务/Task状态未核验，AF_PIPE/Tk/浏览器、正常退出后的旧文件保留基线/加载绑定、真实启动和额度仍分别授权；无provider/Docker/现场操作/提交/子agent，旧boltons余0、Task10第五批余2及停止讨论保持。下方旧“基础5项/原生未执行/矩阵待补”均按历史读取。
+
+> 2026-10-05 接续设计本次审阅已修订、仍待批准：主项目2026-10-05-mokioclaw-prestart-observation-continuation-design.md §4–8/§11补实同句柄磁盘fresh校验、Windows相对父句柄独占创建、bind创建sessions即消费一次性资格、service→manager锁顺序、关闭失败保锁及唯一来源/唯一Task的原repo_id恢复。Task仍prepared/sequence2/未执行，spec/request_digest与8文件manifest及16份副本匹配；361/21/7指纹0变化，旧三文件0/0/100、现场hash仍读取失败。netstat显示63711监听PID35508，未操作实例或确认加载修复。没有接续代码/计划/测试、pytest/Ruff、provider/Docker/重启/重绑/运行或子agent；118/1134是历史绑定修复结果。先批准书面设计，再写计划并审阅；Windows原生门与真实恢复/新额度/Task启动继续分别确认。boltons余0、Task10余2及停止门保持。
+
+> 2026-10-05 观测文件保留接续设计待审：用户要求制定保留文件的方案，已形成主项目docs/superpowers/specs/2026-10-05-mokioclaw-prestart-observation-continuation-design.md。推荐原三文件原位保留、同Task一次独占session、fresh未执行/合同/源码门及原repo_id恢复；三个显式接续参数尚未实现。Task仍prepared/sequence2/execution_started=false、无attempt/worker/请求回执；三文件0/0/100字节，Get-FileHash均被占用，未取得现场hash或冻结确认。必须旧持有者正常退出后才能建立保留基线，不清空/移动/追加、不新建替代Task或自动重试。测试矩阵已写、未执行；361源码测试、21保护及7旧Taskhash保持，四仓HEAD/本地引用与来源index保持。下一步审阅设计后才编写具体实施计划；本轮仅只读/文档，无provider/Docker/重启/重绑/真实任务/新额度或子agent，boltons余0、Task10余2和停止门保持。最新见校准§17/交接§69/进度§108；1134 passed仍为前次绑定修复结果。
+
+> 2026-10-05 观测绑定修复已实施并通过离线回归：用户“可以的，开始修复吧”批准两项计划，本会话直接完成、无子agent。阶段B仅改两份产品和三份测试：viewer序号1–(2**63-1)、worker仍1–1024，严格类型／单调／防重放／未知role拒绝保持；ViewerChannel交换失败永久失效并关闭，已有父端EOF路径撤销ready。最终相关118 passed；全非Docker1134 passed／3 skipped／35 deselected，Ruff通过；两轮RED为10和24个目标失败。63711是用户修复前自行重启并绑定的实例，本轮未重启或操作现场。原Task仍prepared／execution_started=false，已有独占calls／scores／status三文件，前两份0字节；直接重启重绑会碰撞原保护，不能删除、覆盖或另建Task掩盖。下一步先审阅保留已有观测文件的未运行Task接续方案，再安排加载修复及现场验收，真实恢复／新增额度／额外容器检查／prepared启动仍分别确认。没有provider／Docker／真实调用或新额度，boltons余0、Task10余2和停止门保持。最新实测见校准设计§16／交接§68／进度§107；下方待审和无observations均属历史。
+
+> 2026-10-05 绑定失败诊断：用户截图显示绑定失败／calibration_observation_invalid。Task nM9uXVzm-80YmpnpzG5ifFsk仍prepared、无worker／attempt／命令回执，新root无observations。已确认当前codec把viewer与worker序号统一限为1024，而原生窗口每500ms持续poll；纯内存复现立即绑定成功、1023次poll后绑定在1025被拒绝，客户端还未关闭连接。当前窗口从01:06:50启动已远超名义512秒，现象与复现一致；没有现场最后序号，不宣称排除了其他IO／调度故障。新增两项离线修复计划docs/superpowers/plans/2026-10-05-mokioclaw-viewer-binding-fix.md待审：viewer采用独立有界序号并保留单调／防重放，交换失败永久关闭通道并撤销父端就绪。未改产品／prepared／来源／旧证据，未重启、重新绑定、provider／Docker／run或审批，没有新增额度，禁止子agent。旧boltons余0、Task10余2和停止门保持；用户批准修复后先离线验收，再安排重启和绑定，不能用立即绑定绕过长寿命缺陷。当前诊断见校准方案§15／交接§67／技术进度§106；前段‘待绑定后启动’须先过修复门。
+
+> 2026-10-05 新校准任务已准备：用户“那你开始准备任务吧”授权准备，本会话在61771仅预览并创建一次Task nM9uXVzm-80YmpnpzG5ifFsk（repo_id VM6ft8DoH9aT0feYNsOjl9tM），停在prepared。原1149字符说明、八项读写范围、固定命令及150000／20／3072／1 attempt／1200秒保持；新baseline／work八份源码各80098字节，16项与固定提交blob逐字节一致，仅work另有框架生成的两份空白记事文件。没有worker／attempt／命令回执；观测目录尚未建立，原生窗口待用户绑定该Task，不能据此声称观测就绪或正式验证通过。本轮未调用provider／Docker、未/run或审批、未增加额度、不使用子agent。boltons原余0、Task10余2及停止门保持；后续观测绑定、额外容器检查、恢复与新一次额度及该prepared启动须按各自门完成。详见主项目真实校准设计§14、阶段B交接§66／技术进度§105；此前60718／未创建Task文字为历史。
+
+> 2026-10-05 接续：用户“ok的”接受私有观测离线交付。用户提供60718工作台后，本会话仅作只读就绪核对：页面boltons为干净detached，base／anchor／HEAD均967864f89791509f9eb36b22b4579d36b72a6df2，当前页面没有绑定Task；服务进程13544使用uv托管Python，带--enable-agent及原镜像，但task-root仍为旧boltons-mokioclaw-private/tasks，未带--calibration-root。此实例未通过本轮私有观测就绪门；实际模块来源、Tk／私有管道／绑定与真实逐次记录未验收。下一步由启动者使用指定Python、阶段B源码和新校准root/tasks重启并提供新地址，详见真实校准设计§13。地址访问不授权新一次额度／Docker／准备或/run；boltons余0、Task10余2及停止门保持。此轮没有产品修改、新pytest／Ruff、provider／Docker、创建Task、命令审批或运行，不使用子agent；下方待用户验收／未访问工作台文字保留历史。
+
+> 2026-10-04 最新私有观测实施：用户“可以的，开始吧”批准六项离线计划，已在阶段B dirty 工作树本会话直接完成，未使用子agent，待用户验收。逐次白名单／原计数与政策、实际交接单槽／显式超限提示／评分、认证JSON字节IPC／独占数值文件、显式校准开关／prepared绑定及原生查看器接线已落地；公开API／TaskSpec、原总门／七槽／上下文／scope／审批／固定正式验证保持。本轮全非Docker1073 passed／3 skipped／35 deselected，Ruff通过；相关698通过是后补ACK检测前记录，最终全项目已覆盖修正。21保护资产及7旧Task hash、四HEAD／全部本地引用和两来源status保持，主项目产品未改。具体计划最终段、StageB交接§64／技术进度§103为当前状态；下方“未执行／待审”保留历史，不能覆盖本授权。没有provider／Docker／真实AF_PIPE或GUI／工作台／新校准根／真实Task。真实逐次usage、交接语义／费用／正式完成仍未测；当前无需工作台，需要启动时先告知。真实恢复、新一次额度／额外容器检查和每prepared运行仍单独确认；boltons余0、Task10余2与停止门保持。
+
+> 2026-10-04 最新观测计划：用户确认真实校准方向并要求需要启动工作台时告知。主项目docs/superpowers/plans/2026-10-04-mokioclaw-private-calibration-observation.md已形成六项具体计划（数值契约、可信接线、交接内存、认证IPC／文件、原生窗口／绑定、实际图离线回归），全部未执行，待具体计划审阅；此前校准草案‘待方向确认’是历史。选择AF_PIPE＋Tk、显式--calibration-root、32条队列／1秒ACK、私有409600帧及失败清除等细化随计划待审，不改原总门／正式验证／审批。当前无需启动工作台，无新增实验／pytest／Ruff、产品代码、provider／Docker／GUI／真实任务，不使用子agent。最新交接§63／进度§102；离线验收后需要工作台时再告知，真实恢复／新一次额度／额外容器检查及每prepared启动仍单独授权，boltons余0、Task10余2保留。 本计划轮实际两树348份产品／测试Python、21保护资产及7旧Task资产hash保持；四仓HEAD／引用保持，stage／来源status保持，main仅新增本计划；两树diff检查通过、9个明确文档有限格式扫描0命中。
+
+> 2026-10-04 最新校准方案：用户接受离线实现后要求制定真实校准方案，主项目docs/superpowers/specs/2026-10-04-mokioclaw-real-calibration-design.md已形成待审候选。推荐先补仅数值私有记录＋本机内存交接查看，再新boltons同SHA／原说明／原命令／150000 token／20调用／3072输出／1 attempt／1200秒一次；Task10余2不转用。现有聚合事件无法还原逐次usage或交接语义质量。观测实现、恢复／新额度、最多两次额外无provider容器检查及每prepared启动均未批准；本轮仅只读与文档，无新增实验／pytest／Ruff、provider／Docker或真实任务，禁止子agent。最新记录见阶段B交接§62／进度§101，旧‘下一步’按历史读取。
+
+> 2026-10-04 用户验收：用户明确“先接受这个离线实现吧”，本轮收尾七项离线实现已接受，保留此前内部上下文能力；这不代表整个阶段B或真实维护能力已验收。真实token／费用、摘要质量与维护成功率仍待单独校准；真实停止门保持，boltons余0、Task10第五批余2保留，不授权provider／Docker、真实恢复或每个prepared启动、预算提高、来源应用、提交／push，禁止子agent。本次仅记录验收，不重跑产品测试，381／977等仍为前次实施验证。
+
+> 2026-10-04 最新接续记录：本文件是较旧历史基线，当前实现仍以阶段B工作树完整设计及其最新增补为准。用户批准收尾七项计划后已完成离线实施／作者自审；相关381 passed，非Docker977 passed／3 skipped／35 deselected，Ruff通过。详见主项目独立收尾设计§10、计划最终记录和实施树交接§60／进度§99，不据本文件旧参数或旧“提交／推送”文字恢复授权。原总门／固定验证／审批保持，无provider／Docker／真实试点或预算提高，无来源应用／提交／push／fetch；禁止子agent，boltons余0、Task10第五批余2保留，真实恢复与每prepared启动继续单独确认。
+
 > 日期：2026-09-28（Asia/Shanghai）
 > 状态：用户于 2026-09-28 指示按本设计逐步实施；provider 调用与真实 Agent 试点仍需单独授权
 > 前置基线：`2026-09-26-mokioclaw-local-repository-review-dashboard-design.md` 与本地工作台 V1
@@ -55,6 +81,8 @@
 
 ## 5. 固定提交与副本准备
 
+2026-10-04 实施树接续说明：本文件保留主项目较早设计基线。阶段 B 工作树 C:\Users\lyf\.codex\worktrees\mokioclaw-stage-b\MokioAgent 中的同名设计记录了后续获批调整；该树当前任务预算取值上限为24调用／300000累计已报告token／4096单次输出，默认值及下一次调用检查语义不因本说明改变。旧段落的20／100000是历史初版上限；取值上限不是新试点授权。最新boltons试点只获一次150000／20／3072，已用完，正式验证not_run；Task10余2次保留且真实运行停止讨论。上下文／收尾离线诊断已完成，产品修复尚未批准。本次仅整理文档；接续资料及授权边界见 docs/MOKIOCLAW_NEXT_SESSION_BRIEF_2026-10-04.md、主项目瓶颈顶部，以及阶段B交接§51–53／进度§90–92。新任务仍须完整阅读实施树当前设计并重新核对Git与任务策略。
+
 可信准备器只用受控、只读 Git 参数枚举 base SHA 下的树对象，并仅对批准范围内的普通 blob 读取内容；不对整个仓库执行 checkout、archive 或 clone。路径大小写折叠后排除文件名 `.env`、前缀 `.env.`、后缀 `.pem`／`.key`、文件名 `id_rsa`／`id_ed25519`／`credentials.json`／`secrets.json`，以及路径段 `.git`／`.mokioclaw` 和本项目的 `evals/reports/` 冻结证据目录；ignored 与未提交文件本来不在提交树中，也不读取。路径规则不能证明其它文件不含秘密，用户仍须审阅批准范围。预览只用树元数据，不读取 blob 内容或秘密值。
 
 第一版上限为：路径选择最多 100 项、普通文件最多 5,000 个、单文件最多 4 MiB、复制总量最多 64 MiB、任务描述最多 4,000 字符、预览有效期 10 分钟、单任务总运行时间最多 30 分钟、单命令最多 600 秒、最多 3 次 Agent 尝试、预先指定的验证命令最多 10 条。provider 预算由用户对每项任务明示，取值上限为 20 次请求、累计 100,000 个已报告 token、单次最多 4,096 个输出 token；下一次调用前检查已知用量，达到阈值即停止。provider 未报告用量时停止并记为 `usage_unavailable`；最后一次调用可能使累计量越过阈值，不能将此机制表述为严格费用上限。超限在预览或准备阶段给出固定错误，不截断后继续执行。
@@ -84,6 +112,10 @@ Docker 仅隔离命令，不使宿主 Python worker 的文件工具自动安全�
 命令容器的网络默认关闭，任何依赖下载或外部服务的验证均返回明确“未运行／边界禁止”，而非测试失败。命令批准不会放宽挂载或网络策略。取消与总超时按 §4 的清理顺序终止 worker 及全部归属容器，迟到事件不改变终态。
 
 ## 7. API、页面与事件投影
+
+2026-10-04 本轮设计草案已形成：独立文件 `2026-10-04-mokioclaw-task-codeagent-context-design.md` 记录task-only内部上下文／历史整理、正文与结果窗口、修改落点及12组离线测试计划，待用户审阅。96／72／48KiB输入字节门、8／16KiB正文／JSON、100行默认、32MiB内存库、ToolResultReadTool与固定上下文失败类别均为提案，不是当前实现或新授权；无新增实验／pytest／Ruff、provider／Docker／真实任务。审阅后才编写实施计划并确认执行范围。当前实现继续以阶段B工作树同名设计获批增补为准；本草案不改其总门、公开原文边界或试点额度。
+
+2026-10-04 离线诊断记录：12项真实工作流配假模型／假执行器探针确认CodeAgent内部历史对图层监控不可见、长行未受正文上限约束、交接／verifier没有阶段保留量；窗口组65.3%下降是正文字符而非真实token／费用。自测后通常仍有摘要／planner／verifier模型调用，正式固定命令先于verifier模型，不能仅凭零verifier调用判断未运行。用户本次仅要求整理文档和接续prompt，未批准具体上下文限额／历史整理行为或收尾余量策略；下一步先形成设计与测试计划供审阅，不自动提高预算、启动余次或变更公开原文留存边界。阶段B同名设计与私有context-closeout-diagnosis-2026-10-04.md记录完整证据；本段不修改V1数据或现有API契约。
 
 保留 V1 只读 API 和 `review-priority-v1` 输出。新增同源接口的建议契约：
 
